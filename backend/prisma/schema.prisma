@@ -1,0 +1,776 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// AUTHENTICATION & USERS
+// ============================================
+
+model User {
+  id                    String    @id @default(cuid())
+  phoneNumber           String    @unique
+  fullName              String
+  email                 String?   @unique
+  profilePhoto          String?
+  role                  UserRole
+  isVerified            Boolean   @default(false)
+  isBlocked             Boolean   @default(false)
+  lastLogin             DateTime?
+  isBusinessAccount     Boolean   @default(false)
+  
+  // Authentication
+  otpToken              String?
+  otpExpiresAt          DateTime?
+  jwtToken              String?
+  refreshToken          String?
+  deviceId              String?
+  deviceInfo            String?
+  biometricEnabled      Boolean   @default(false)
+  
+  // Relations
+  customer              Customer?
+  rider                 Rider?
+  admin                 Admin?
+  franchiseManager      FranchiseManager?
+  
+  // Activity logs
+  auditLogs             AuditLog[]
+  sessions              DeviceSession[]
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+}
+
+enum UserRole {
+  CUSTOMER
+  RIDER
+  ADMIN
+  FRANCHISE_MANAGER
+}
+
+model DeviceSession {
+  id                    String    @id @default(cuid())
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deviceId              String    @unique
+  deviceName            String
+  deviceOS              String
+  pushToken             String?
+  isActive              Boolean   @default(true)
+  lastActivityAt        DateTime  @default(now())
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+}
+
+// ============================================
+// CUSTOMER
+// ============================================
+
+model Customer {
+  id                    String    @id @default(cuid())
+  userId                String    @unique
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  // Profile
+  totalOrders           Int       @default(0)
+  totalSpent            Float     @default(0)
+  averageRating         Float     @default(0)
+  loyaltyPoints         Int       @default(0)
+  membershipTier        MembershipTier @default(STANDARD)
+  
+  // Relations
+  addresses             Address[]
+  emergencyContacts     EmergencyContact[]
+  orders                Order[]
+  savedPayments         SavedPayment[]
+  reviews               Review[]
+  wallet                Wallet?
+  referrals             Referral[]
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+}
+
+enum MembershipTier {
+  STANDARD
+  PREMIUM
+  VIP
+}
+
+model Address {
+  id                    String    @id @default(cuid())
+  customerId            String
+  customer              Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  
+  type                  AddressType
+  fullAddress           String
+  landmark              String?
+  latitude              Float
+  longitude             Float
+  city                  String
+  state                 String
+  pinCode               String
+  
+  isDefault             Boolean   @default(false)
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+}
+
+enum AddressType {
+  HOME
+  OFFICE
+  VILLAGE
+  FARM
+  SHOP
+  OTHER
+}
+
+model EmergencyContact {
+  id                    String    @id @default(cuid())
+  customerId            String
+  customer              Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  
+  name                  String
+  phoneNumber           String
+  relationship          String
+  isDefault             Boolean   @default(false)
+  
+  createdAt             DateTime  @default(now())
+}
+
+// ============================================
+// RIDER
+// ============================================
+
+model Rider {
+  id                    String    @id @default(cuid())
+  userId                String    @unique
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  // Verification
+  aadhaarNumber         String    @unique
+  aadhaarPhoto          String
+  licenseNumber         String    @unique
+  licensePhoto          String
+  rcNumber              String    @unique
+  rcPhoto               String
+  selfiePhoto           String
+  
+  verificationStatus    VerificationStatus @default(PENDING)
+  isApproved            Boolean   @default(false)
+  isSuspended           Boolean   @default(false)
+  suspensionReason      String?
+  
+  // Vehicle
+  vehicle               Vehicle?
+  
+  // Performance
+  totalDeliveries       Int       @default(0)
+  completedDeliveries   Int       @default(0)
+  cancelledDeliveries   Int       @default(0)
+  averageRating         Float     @default(0)
+  totalEarnings         Float     @default(0)
+  
+  // Status
+  isOnline              Boolean   @default(false)
+  currentLocation       String?
+  latitude              Float?
+  longitude             Float?
+  lastLocationUpdate    DateTime?
+  
+  // Daily stats
+  dailyEarnings         Float     @default(0)
+  dailyDeliveries       Int       @default(0)
+  
+  // Franchise
+  franchiseId           String?
+  franchise             Franchise?  @relation(fields: [franchiseId], references: [id])
+  
+  // Relations
+  assignedOrders        Order[]
+  deliveries            Delivery[]
+  performances          RiderPerformance[]
+  wallet                Wallet?
+  bankDetails           BankDetails?
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+}
+
+enum VerificationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  FAILED_FACE_MATCH
+}
+
+model Vehicle {
+  id                    String    @id @default(cuid())
+  riderId               String    @unique
+  rider                 Rider     @relation(fields: [riderId], references: [id], onDelete: Cascade)
+  
+  vehicleType           VehicleType
+  vehicleNumber         String    @unique
+  vehicleModel          String
+  vehicleColor          String
+  rc                    String
+  rcExpiryDate          DateTime
+  
+  frontPhoto            String
+  sidePhoto             String
+  backPhoto             String
+  
+  isVerified            Boolean   @default(false)
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+}
+
+enum VehicleType {
+  BIKE
+  AUTO
+  MINI_VAN
+  CAR_PREMIUM
+  TRUCK
+}
+
+model BankDetails {
+  id                    String    @id @default(cuid())
+  riderId               String    @unique
+  rider                 Rider     @relation(fields: [riderId], references: [id], onDelete: Cascade)
+  
+  accountHolderName     String
+  accountNumber         String
+  bankName              String
+  ifscCode              String
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+}
+
+model RiderPerformance {
+  id                    String    @id @default(cuid())
+  riderId               String
+  rider                 Rider     @relation(fields: [riderId], references: [id], onDelete: Cascade)
+  
+  date                  DateTime  @default(now())
+  deliveriesCompleted   Int
+  deliveriesCancelled   Int
+  averageDeliveryTime   Float
+  averageRating         Float
+  earnings              Float
+  acceptanceRate        Float
+  cancellationRate      Float
+  
+  createdAt             DateTime  @default(now())
+}
+
+// ============================================
+// ORDERS & DELIVERY
+// ============================================
+
+model Order {
+  id                    String    @id @default(cuid())
+  orderNumber           String    @unique @default(cuid())
+  
+  customerId            String
+  customer              Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  
+  riderId               String?
+  rider                 Rider?    @relation(fields: [riderId], references: [id])
+  
+  // Locations
+  pickupAddressId       String
+  pickupAddress         Address?  @relation("pickupAddress", fields: [pickupAddressId], references: [id])
+  dropAddressId         String
+  dropAddress           Address?  @relation("dropAddress", fields: [dropAddressId], references: [id])
+  
+  pickupLat             Float
+  pickupLng             Float
+  dropLat               Float
+  dropLng               Float
+  estimatedDistance     Float
+  
+  // Delivery Details
+  parcelCategory        ParcelCategory
+  parcelWeight          Float
+  parcelValue           Float
+  parcelDescription     String?
+  isFragile             Boolean   @default(false)
+  specialInstructions   String?
+  
+  // Vehicle & Type
+  vehicleType           VehicleType
+  deliveryType          DeliveryType
+  
+  // Status
+  status                OrderStatus @default(PENDING)
+  assignedAt            DateTime?
+  pickedUpAt            DateTime?
+  deliveredAt           DateTime?
+  cancelledAt           DateTime?
+  cancelReason          String?
+  
+  // Pricing
+  baseFare              Float
+  distanceFare          Float
+  weightFare            Float
+  peakHourCharge        Float     @default(0)
+  nightCharge           Float     @default(0)
+  rainCharge            Float     @default(0)
+  urgencyCharge         Float     @default(0)
+  insuranceCharge       Float     @default(0)
+  totalPrice            Float
+  discountAmount        Float     @default(0)
+  finalPrice            Float
+  
+  // Payment
+  paymentMethod         PaymentMethod
+  paymentStatus         PaymentStatus @default(PENDING)
+  
+  // Estimated time
+  estimatedPickupTime   DateTime?
+  estimatedDeliveryTime DateTime?
+  actualDeliveryTime    DateTime?
+  
+  // Relations
+  delivery              Delivery?
+  payments              Payment[]
+  trackingLogs          TrackingLog[]
+  photos                OrderPhoto[]
+  reviews               Review[]
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  
+  @@index([customerId])
+  @@index([riderId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+enum ParcelCategory {
+  DOCUMENTS
+  FOOD
+  MEDICINE
+  ELECTRONICS
+  CLOTHING
+  FRAGILE_ITEMS
+  GROCERY
+  OTHER
+}
+
+enum DeliveryType {
+  STANDARD
+  EXPRESS
+  PRIORITY
+  EMERGENCY
+  SCHEDULED
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  ASSIGNED
+  PICKED_UP
+  ON_WAY
+  DELIVERED
+  CANCELLED
+  RETURNED
+  FAILED
+}
+
+model Delivery {
+  id                    String    @id @default(cuid())
+  orderId               String    @unique
+  order                 Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  
+  riderId               String
+  rider                 Rider     @relation(fields: [riderId], references: [id])
+  
+  // Proof of delivery
+  pickupPhoto           String?
+  pickupVideoUrl        String?
+  deliveryPhoto         String?
+  deliveryVideoUrl      String?
+  receiverPhoto         String?
+  receiverOTP           String?
+  receiverSignature     String?
+  
+  // AI Verification
+  aiVerified            Boolean   @default(false)
+  aiConfidenceScore     Float?
+  
+  // Status
+  status                DeliveryStatus @default(PENDING)
+  startedAt             DateTime?
+  completedAt           DateTime?
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+}
+
+enum DeliveryStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+  RETURNED
+}
+
+// ============================================
+// TRACKING & LOCATION
+// ============================================
+
+model TrackingLog {
+  id                    String    @id @default(cuid())
+  orderId               String
+  order                 Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  
+  latitude              Float
+  longitude             Float
+  status                OrderStatus
+  timestamp             DateTime  @default(now())
+  accuracy              Float?
+  
+  @@index([orderId])
+  @@index([timestamp])
+}
+
+// ============================================
+// PAYMENTS & WALLET
+// ============================================
+
+model Payment {
+  id                    String    @id @default(cuid())
+  orderId               String
+  order                 Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  
+  amount                Float
+  paymentMethod         PaymentMethod
+  status                PaymentStatus
+  transactionId         String?
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+}
+
+enum PaymentMethod {
+  UPI
+  PHONEPE
+  GOOGLE_PAY
+  PAYTM
+  CREDIT_CARD
+  DEBIT_CARD
+  NET_BANKING
+  WALLET
+  CASH
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  REFUNDED
+}
+
+model SavedPayment {
+  id                    String    @id @default(cuid())
+  customerId            String
+  customer              Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  
+  paymentMethod         PaymentMethod
+  lastFourDigits        String
+  expiryDate            String?
+  
+  isDefault             Boolean   @default(false)
+  
+  createdAt             DateTime  @default(now())
+}
+
+model Wallet {
+  id                    String    @id @default(cuid())
+  customerId            String?   @unique
+  customer              Customer? @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  
+  riderId               String?   @unique
+  rider                 Rider?    @relation(fields: [riderId], references: [id], onDelete: Cascade)
+  
+  balance               Float     @default(0)
+  totalCredit           Float     @default(0)
+  totalDebit            Float     @default(0)
+  
+  transactions          WalletTransaction[]
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+}
+
+model WalletTransaction {
+  id                    String    @id @default(cuid())
+  walletId              String
+  wallet                Wallet    @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  
+  type                  TransactionType
+  amount                Float
+  description           String
+  previousBalance       Float
+  newBalance            Float
+  
+  createdAt             DateTime  @default(now())
+}
+
+enum TransactionType {
+  CREDIT
+  DEBIT
+  REFUND
+  BONUS
+}
+
+// ============================================
+// ADMIN & FRANCHISE
+// ============================================
+
+model Admin {
+  id                    String    @id @default(cuid())
+  userId                String    @unique
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  permissions           String[]
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+}
+
+model FranchiseManager {
+  id                    String    @id @default(cuid())
+  userId                String    @unique
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  franchiseId           String
+  franchise             Franchise @relation(fields: [franchiseId], references: [id], onDelete: Cascade)
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+}
+
+model Franchise {
+  id                    String    @id @default(cuid())
+  franchiseName         String
+  ownerName             String
+  phoneNumber           String    @unique
+  email                 String?   @unique
+  
+  city                  String
+  state                 String
+  area                  String
+  
+  documentPhoto         String?
+  approvalStatus        ApprovalStatus @default(PENDING)
+  
+  riders                Rider[]
+  managers              FranchiseManager[]
+  pricingRules          PricingRule[]
+  deliveryZones         DeliveryZone[]
+  
+  localRevenue          Float     @default(0)
+  localOrders           Int       @default(0)
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// ============================================
+// PRICING & ZONES
+// ============================================
+
+model PricingRule {
+  id                    String    @id @default(cuid())
+  franchiseId           String?
+  franchise             Franchise? @relation(fields: [franchiseId], references: [id])
+  
+  baseFare              Float
+  pricePerKm            Float
+  weightChargePerKg     Float
+  waitingChargePerMin   Float
+  peakHourMultiplier    Float     @default(1)
+  nightMultiplier       Float     @default(1)
+  rainMultiplier        Float     @default(1)
+  urgencyMultiplier     Float     @default(1)
+  premiumMultiplier     Float     @default(1)
+  
+  vehicleType           VehicleType
+  
+  effectiveFrom         DateTime
+  effectiveTo           DateTime?
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+}
+
+model DeliveryZone {
+  id                    String    @id @default(cuid())
+  franchiseId           String?
+  franchise             Franchise? @relation(fields: [franchiseId], references: [id])
+  
+  zoneName              String
+  city                  String
+  centerLatitude        Float
+  centerLongitude       Float
+  radiusKm              Float
+  
+  isActive              Boolean   @default(true)
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+}
+
+// ============================================
+// REVIEWS & RATINGS
+// ============================================
+
+model Review {
+  id                    String    @id @default(cuid())
+  orderId               String
+  order                 Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  
+  customerId            String
+  customer              Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  
+  rating                Int       // 1-5
+  comment               String?
+  
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+}
+
+// ============================================
+// PHOTOS & MEDIA
+// ============================================
+
+model OrderPhoto {
+  id                    String    @id @default(cuid())
+  orderId               String
+  order                 Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  
+  photoUrl              String
+  photoType             PhotoType
+  uploadedBy            String
+  uploadedAt            DateTime  @default(now())
+  
+  createdAt             DateTime  @default(now())
+}
+
+enum PhotoType {
+  PICKUP
+  DELIVERY
+  PARCEL
+  RECEIVER
+}
+
+// ============================================
+// NOTIFICATIONS
+// ============================================
+
+model Notification {
+  id                    String    @id @default(cuid())
+  userId                String
+  
+  title                 String
+  message               String
+  type                  NotificationType
+  
+  isRead                Boolean   @default(false)
+  readAt                DateTime?
+  
+  data                  String?   // JSON data
+  
+  createdAt             DateTime  @default(now())
+}
+
+enum NotificationType {
+  ORDER_CONFIRMED
+  ORDER_ASSIGNED
+  ORDER_PICKED
+  ORDER_DELIVERED
+  ORDER_CANCELLED
+  PAYMENT_RECEIVED
+  RIDER_ASSIGNED
+  DELIVERY_COMPLETED
+  REVIEW_REQUEST
+  SYSTEM_ALERT
+  PROMO_OFFER
+  OTHER
+}
+
+// ============================================
+// REFERRALS
+// ============================================
+
+model Referral {
+  id                    String    @id @default(cuid())
+  referrerId            String
+  referrer              Customer  @relation(fields: [referrerId], references: [id], onDelete: Cascade)
+  
+  referralCode          String    @unique
+  discountAmount        Float
+  minOrderValue         Float
+  
+  isActive              Boolean   @default(true)
+  totalUsed             Int       @default(0)
+  
+  createdAt             DateTime  @default(now())
+}
+
+// ============================================
+// AUDIT & SECURITY
+// ============================================
+
+model AuditLog {
+  id                    String    @id @default(cuid())
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  action                String
+  resource              String
+  resourceId            String
+  details               String?
+  ipAddress             String?
+  userAgent             String?
+  
+  createdAt             DateTime  @default(now())
+  
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model BlacklistedUser {
+  id                    String    @id @default(cuid())
+  userId                String    @unique
+  reason                String
+  blockedAt             DateTime  @default(now())
+  unblockedAt           DateTime?
+}
+
+model BlacklistedRider {
+  id                    String    @id @default(cuid())
+  riderId               String    @unique
+  reason                String
+  blockedAt             DateTime  @default(now())
+  unblockedAt           DateTime?
+}
