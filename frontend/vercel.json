@@ -1,21 +1,7 @@
 {
-  "buildCommand": "npm run build",
-  "devCommand": "npm run dev",
-  "installCommand": "npm install",
+  "version": 2,
   "framework": "nextjs",
-  "env": [
-    {
-      "key": "NEXT_PUBLIC_API_URL",
-      "value": "",
-      "type": "plaintext",
-      "description": "Backend API URL for frontend calls"
-    }
-  ],
-  "regions": ["iad1"],
-  "git": {
-    "deploymentEnabled": {
-      "main": true,
-      "preview": true
-    }
-  }
+  "installCommand": "npm install --legacy-peer-deps",
+  "buildCommand": "npm run build",
+  "devCommand": "npm run dev"
 }
