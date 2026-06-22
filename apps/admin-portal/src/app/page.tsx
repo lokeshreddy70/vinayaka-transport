@@ -51,6 +51,7 @@ type DashboardCounts = Record<string, number>;
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "https://vinayaka-transport-api.vercel.app/api/v1";
 const TOKEN_KEY = "vinayaka_admin_token";
+const REFRESH_TOKEN_KEY = "vinayaka_admin_refresh_token";
 
 async function api<T>(path: string, options: RequestInit = {}, token?: string): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, {
@@ -64,7 +65,9 @@ async function api<T>(path: string, options: RequestInit = {}, token?: string): 
 
   const data = await response.json();
   if (!response.ok) {
-    throw new Error(data.error ?? "Request failed");
+    const error = new Error(data.error ?? "Request failed") as Error & { status?: number };
+    error.status = response.status;
+    throw error;
   }
 
   return data as T;
@@ -72,9 +75,12 @@ async function api<T>(path: string, options: RequestInit = {}, token?: string): 
 
 export default function AdminPortalPage() {
   const [token, setToken] = useState<string>("");
+  const [refreshToken, setRefreshToken] = useState<string>("");
   const [me, setMe] = useState<AuthUser | null>(null);
   const [error, setError] = useState<string>("");
   const [loading, setLoading] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotMessage, setForgotMessage] = useState("");
 
   const [counts, setCounts] = useState<DashboardCounts>({});
   const [branches, setBranches] = useState<Branch[]>([]);
@@ -91,8 +97,12 @@ export default function AdminPortalPage() {
 
   useEffect(() => {
     const stored = localStorage.getItem(TOKEN_KEY) ?? "";
+    const storedRefresh = localStorage.getItem(REFRESH_TOKEN_KEY) ?? "";
     if (stored) {
       setToken(stored);
+    }
+    if (storedRefresh) {
+      setRefreshToken(storedRefresh);
     }
   }, []);
 
@@ -118,21 +128,70 @@ export default function AdminPortalPage() {
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Unable to load admin portal";
       setError(message);
-      localStorage.removeItem(TOKEN_KEY);
-      setToken("");
-      setMe(null);
+      if (refreshToken) {
+        const ok = await refreshSession(refreshToken);
+        if (ok) {
+          return;
+        }
+      }
+      clearSession();
     } finally {
       setLoading(false);
     }
   }
 
+  function clearSession() {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(REFRESH_TOKEN_KEY);
+    setToken("");
+    setRefreshToken("");
+    setMe(null);
+  }
+
+  async function refreshSession(currentRefreshToken: string): Promise<boolean> {
+    try {
+      const result = await api<{ access_token: string; refresh_token: string; user: AuthUser }>("/auth/refresh", {
+        method: "POST",
+        body: JSON.stringify({ refresh_token: currentRefreshToken }),
+      });
+
+      localStorage.setItem(TOKEN_KEY, result.access_token);
+      localStorage.setItem(REFRESH_TOKEN_KEY, result.refresh_token);
+      setToken(result.access_token);
+      setRefreshToken(result.refresh_token);
+      setMe(result.user);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function requestWithRetry<T>(path: string, options: RequestInit = {}): Promise<T> {
+    try {
+      return await api<T>(path, options, token);
+    } catch (err: unknown) {
+      const typed = err as Error & { status?: number };
+      if (typed.status === 401 && refreshToken) {
+        const ok = await refreshSession(refreshToken);
+        if (!ok) {
+          clearSession();
+          throw new Error("Session expired. Please login again.");
+        }
+        const latest = localStorage.getItem(TOKEN_KEY) ?? "";
+        return await api<T>(path, options, latest);
+      }
+
+      throw err;
+    }
+  }
+
   async function reloadAll(authToken = token) {
     const [dashboard, branchData, ruleData, userData, complaintData] = await Promise.all([
-      api<DashboardCounts>("/analytics/dashboard", {}, authToken),
-      api<Branch[]>("/branches", {}, authToken),
-      api<PricingRule[]>("/pricing_rules", {}, authToken),
-      api<AppUser[]>("/users", {}, authToken),
-      api<Complaint[]>("/complaints", {}, authToken),
+      authToken === token ? requestWithRetry<DashboardCounts>("/analytics/dashboard") : api<DashboardCounts>("/analytics/dashboard", {}, authToken),
+      authToken === token ? requestWithRetry<Branch[]>("/branches") : api<Branch[]>("/branches", {}, authToken),
+      authToken === token ? requestWithRetry<PricingRule[]>("/pricing_rules") : api<PricingRule[]>("/pricing_rules", {}, authToken),
+      authToken === token ? requestWithRetry<AppUser[]>("/users") : api<AppUser[]>("/users", {}, authToken),
+      authToken === token ? requestWithRetry<Complaint[]>("/complaints") : api<Complaint[]>("/complaints", {}, authToken),
     ]);
 
     setCounts(dashboard);
@@ -147,7 +206,7 @@ export default function AdminPortalPage() {
     try {
       setLoading(true);
       setError("");
-      const result = await api<{ access_token: string; user: AuthUser }>("/auth/login", {
+      const result = await api<{ access_token: string; refresh_token: string; user: AuthUser }>("/auth/login", {
         method: "POST",
         body: JSON.stringify({ email: loginEmail, password: loginPassword }),
       });
@@ -157,7 +216,9 @@ export default function AdminPortalPage() {
       }
 
       localStorage.setItem(TOKEN_KEY, result.access_token);
+      localStorage.setItem(REFRESH_TOKEN_KEY, result.refresh_token);
       setToken(result.access_token);
+      setRefreshToken(result.refresh_token);
       setLoginPassword("");
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Login failed";
@@ -168,9 +229,23 @@ export default function AdminPortalPage() {
   }
 
   function logout() {
-    localStorage.removeItem(TOKEN_KEY);
-    setToken("");
-    setMe(null);
+    clearSession();
+  }
+
+  async function forgotPassword(event: FormEvent) {
+    event.preventDefault();
+    try {
+      setForgotMessage("");
+      setError("");
+      await api<{ ok: boolean; message: string }>("/auth/forgot-password", {
+        method: "POST",
+        body: JSON.stringify({ email: forgotEmail }),
+      });
+      setForgotMessage("Reset link sent. Check your email inbox.");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Unable to send reset link";
+      setError(message);
+    }
   }
 
   async function createUser(event: FormEvent) {
@@ -178,7 +253,7 @@ export default function AdminPortalPage() {
     try {
       setError("");
       const password = `Temp@${Date.now()}`;
-      await api("/auth/register", {
+      await requestWithRetry("/auth/register", {
         method: "POST",
         body: JSON.stringify({
           fullName: newUser.full_name,
@@ -187,7 +262,7 @@ export default function AdminPortalPage() {
           phone: newUser.phone || undefined,
           role: newUser.role,
         }),
-      }, token);
+      });
 
       setNewUser({ full_name: "", email: "", role: "operations_staff", phone: "" });
       await reloadAll();
@@ -201,7 +276,7 @@ export default function AdminPortalPage() {
     event.preventDefault();
     try {
       setError("");
-      await api("/branches", {
+      await requestWithRetry("/branches", {
         method: "POST",
         body: JSON.stringify({
           name: newBranch.name,
@@ -210,7 +285,7 @@ export default function AdminPortalPage() {
           longitude: Number(newBranch.longitude),
           radius_km: Number(newBranch.radius_km),
         }),
-      }, token);
+      });
 
       setNewBranch({ name: "", city: "", latitude: "", longitude: "", radius_km: "" });
       await reloadAll();
@@ -224,7 +299,7 @@ export default function AdminPortalPage() {
     event.preventDefault();
     try {
       setError("");
-      await api("/pricing_rules", {
+      await requestWithRetry("/pricing_rules", {
         method: "POST",
         body: JSON.stringify({
           branch_id: newRule.branch_id,
@@ -235,7 +310,7 @@ export default function AdminPortalPage() {
           commission_percent: Number(newRule.commission_percent),
           cod_enabled: newRule.cod_enabled,
         }),
-      }, token);
+      });
 
       setNewRule({ branch_id: "", vehicle_type: "bike", base_fare: "", per_km_rate: "", min_fare: "", commission_percent: "", cod_enabled: true });
       await reloadAll();
@@ -248,10 +323,10 @@ export default function AdminPortalPage() {
   async function closeComplaint(id: string) {
     try {
       setError("");
-      await api(`/complaints/${id}`, {
+      await requestWithRetry(`/complaints/${id}`, {
         method: "PATCH",
         body: JSON.stringify({ status: "closed" }),
-      }, token);
+      });
       await reloadAll();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Unable to update complaint";
@@ -271,6 +346,12 @@ export default function AdminPortalPage() {
           <input required value={loginEmail} onChange={(event) => setLoginEmail(event.target.value)} type="email" placeholder="Admin email" className="rounded-md border px-3 py-2" />
           <input required value={loginPassword} onChange={(event) => setLoginPassword(event.target.value)} type="password" placeholder="Password" className="rounded-md border px-3 py-2" />
           <button disabled={loading} className="rounded-md bg-ocean px-4 py-2 font-semibold text-white">{loading ? "Signing in..." : "Login"}</button>
+        </form>
+        <form onSubmit={forgotPassword} className="mt-3 grid gap-2 rounded-xl bg-white p-4 shadow">
+          <p className="text-sm font-semibold">Forgot password</p>
+          <input required type="email" value={forgotEmail} onChange={(event) => setForgotEmail(event.target.value)} placeholder="Email for reset link" className="rounded-md border px-3 py-2" />
+          <button className="rounded-md border px-4 py-2 font-semibold">Send Reset Link</button>
+          {forgotMessage ? <p className="text-sm text-green-700">{forgotMessage}</p> : null}
         </form>
         {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}
       </main>

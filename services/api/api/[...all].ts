@@ -18,6 +18,24 @@ const loginSchema = z.object({
   password: z.string().min(8),
 });
 
+const refreshSchema = z.object({
+  refresh_token: z.string().min(10),
+});
+
+const forgotPasswordSchema = z.object({
+  email: z.string().email(),
+  redirect_to: z.string().url().optional(),
+});
+
+const riderOtpRequestSchema = z.object({
+  phone: z.string().min(10).max(20),
+});
+
+const riderOtpVerifySchema = z.object({
+  phone: z.string().min(10).max(20),
+  token: z.string().min(4).max(10),
+});
+
 const bookingSchema = z.object({
   branch_id: z.string().uuid(),
   sender_name: z.string().min(2),
@@ -145,6 +163,122 @@ async function handleAuthLogin(req: IncomingMessage, res: ServerResponse) {
   });
 }
 
+async function handleAuthRefresh(req: IncomingMessage, res: ServerResponse) {
+  const parsed = refreshSchema.safeParse(await parseBody(req));
+  if (!parsed.success) {
+    json(res, 400, { error: "Invalid refresh payload", details: parsed.error.flatten() });
+    return;
+  }
+
+  const { data, error } = await supabaseAnon.auth.refreshSession({
+    refresh_token: parsed.data.refresh_token,
+  });
+
+  if (error || !data.session || !data.user) {
+    json(res, 401, { error: error?.message ?? "Unable to refresh session" });
+    return;
+  }
+
+  const { data: profile, error: profileError } = await supabaseAdmin
+    .from("users")
+    .select("id, auth_user_id, full_name, email, phone, role")
+    .eq("auth_user_id", data.user.id)
+    .maybeSingle();
+
+  if (profileError || !profile) {
+    json(res, 401, { error: "Profile not found" });
+    return;
+  }
+
+  json(res, 200, {
+    access_token: data.session.access_token,
+    refresh_token: data.session.refresh_token,
+    expires_in: data.session.expires_in,
+    user: profile,
+  });
+}
+
+async function handleAuthForgotPassword(req: IncomingMessage, res: ServerResponse) {
+  const parsed = forgotPasswordSchema.safeParse(await parseBody(req));
+  if (!parsed.success) {
+    json(res, 400, { error: "Invalid forgot-password payload", details: parsed.error.flatten() });
+    return;
+  }
+
+  const payload = parsed.data;
+  const { error } = await supabaseAnon.auth.resetPasswordForEmail(payload.email, {
+    redirectTo: payload.redirect_to,
+  });
+
+  if (error) {
+    json(res, 400, { error: error.message });
+    return;
+  }
+
+  json(res, 200, { ok: true, message: "Password reset link sent if account exists" });
+}
+
+async function handleRiderRequestOtp(req: IncomingMessage, res: ServerResponse) {
+  const parsed = riderOtpRequestSchema.safeParse(await parseBody(req));
+  if (!parsed.success) {
+    json(res, 400, { error: "Invalid OTP request payload", details: parsed.error.flatten() });
+    return;
+  }
+
+  const phone = sanitizeText(parsed.data.phone);
+  const { error } = await supabaseAnon.auth.signInWithOtp({ phone });
+
+  if (error) {
+    json(res, 400, { error: error.message });
+    return;
+  }
+
+  json(res, 200, { ok: true, message: "OTP sent" });
+}
+
+async function handleRiderVerifyOtp(req: IncomingMessage, res: ServerResponse) {
+  const parsed = riderOtpVerifySchema.safeParse(await parseBody(req));
+  if (!parsed.success) {
+    json(res, 400, { error: "Invalid OTP verify payload", details: parsed.error.flatten() });
+    return;
+  }
+
+  const payload = parsed.data;
+  const { data, error } = await supabaseAnon.auth.verifyOtp({
+    phone: sanitizeText(payload.phone),
+    token: sanitizeText(payload.token),
+    type: "sms",
+  });
+
+  if (error || !data.session || !data.user) {
+    json(res, 401, { error: error?.message ?? "Invalid OTP" });
+    return;
+  }
+
+  const { data: profile, error: profileError } = await supabaseAdmin
+    .from("users")
+    .select("id, auth_user_id, full_name, email, phone, role")
+    .eq("auth_user_id", data.user.id)
+    .maybeSingle();
+
+  if (profileError || !profile) {
+    json(res, 401, { error: "Profile not found" });
+    return;
+  }
+
+  if (profile.role !== "driver") {
+    json(res, 403, { error: "Only rider accounts can use OTP login" });
+    return;
+  }
+
+  json(res, 200, {
+    access_token: data.session.access_token,
+    refresh_token: data.session.refresh_token,
+    expires_in: data.session.expires_in,
+    user: profile,
+  });
+}
+
 async function handleAuthMe(res: ServerResponse, context: AuthContext | undefined) {
   if (!context) {
     json(res, 401, { error: "Unauthorized" });
@@ -160,12 +294,8 @@ async function handleAuthLogout(res: ServerResponse, context: AuthContext | unde
     return;
   }
 
-  const { error } = await supabaseAnon.auth.signOut();
-  if (error) {
-    json(res, 400, { error: error.message });
-    return;
-  }
-
+  // Supabase server-side client is stateless in this API model.
+  // Client clears tokens locally on manual logout.
   json(res, 200, { ok: true });
 }
 
@@ -603,6 +733,22 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
       }
       if (method === "POST" && action === "login") {
         await handleAuthLogin(req, res);
+        return;
+      }
+      if (method === "POST" && action === "refresh") {
+        await handleAuthRefresh(req, res);
+        return;
+      }
+      if (method === "POST" && action === "forgot-password") {
+        await handleAuthForgotPassword(req, res);
+        return;
+      }
+      if (method === "POST" && action === "rider-request-otp") {
+        await handleRiderRequestOtp(req, res);
+        return;
+      }
+      if (method === "POST" && action === "rider-verify-otp") {
+        await handleRiderVerifyOtp(req, res);
         return;
       }
       if (method === "POST" && action === "logout") {

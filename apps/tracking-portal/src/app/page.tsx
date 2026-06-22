@@ -71,7 +71,10 @@ export default function TrackingPortalPage() {
 
       setResult(data as TrackingResult);
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Unable to track booking";
+      let message = err instanceof Error ? err.message : "Unable to track booking";
+      if (message.toLowerCase().includes("failed to fetch")) {
+        message = "Unable to reach tracking service. Please check connection and try again.";
+      }
       setError(message);
       setResult(null);
     } finally {

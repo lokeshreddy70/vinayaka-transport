@@ -34,6 +34,7 @@ type Trip = {
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "https://vinayaka-transport-api.vercel.app/api/v1";
 const TOKEN_KEY = "vinayaka_operations_token";
+const REFRESH_TOKEN_KEY = "vinayaka_operations_refresh_token";
 
 async function api<T>(path: string, token: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, {
@@ -47,7 +48,9 @@ async function api<T>(path: string, token: string, options: RequestInit = {}): P
 
   const data = await response.json();
   if (!response.ok) {
-    throw new Error(data.error ?? "Request failed");
+    const error = new Error(data.error ?? "Request failed") as Error & { status?: number };
+    error.status = response.status;
+    throw error;
   }
 
   return data as T;
@@ -55,8 +58,11 @@ async function api<T>(path: string, token: string, options: RequestInit = {}): P
 
 export default function OperationsPortalPage() {
   const [token, setToken] = useState("");
+  const [refreshToken, setRefreshToken] = useState("");
   const [me, setMe] = useState<AuthUser | null>(null);
   const [error, setError] = useState("");
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotMessage, setForgotMessage] = useState("");
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -87,8 +93,12 @@ export default function OperationsPortalPage() {
 
   useEffect(() => {
     const stored = localStorage.getItem(TOKEN_KEY) ?? "";
+    const storedRefresh = localStorage.getItem(REFRESH_TOKEN_KEY) ?? "";
     if (stored) {
       setToken(stored);
+    }
+    if (storedRefresh) {
+      setRefreshToken(storedRefresh);
     }
   }, []);
 
@@ -113,18 +123,72 @@ export default function OperationsPortalPage() {
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Failed to load operations portal";
       setError(message);
-      localStorage.removeItem(TOKEN_KEY);
-      setToken("");
-      setMe(null);
+      if (refreshToken) {
+        const ok = await refreshSession(refreshToken);
+        if (ok) {
+          return;
+        }
+      }
+      clearSession();
+    }
+  }
+
+  function clearSession() {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(REFRESH_TOKEN_KEY);
+    setToken("");
+    setRefreshToken("");
+    setMe(null);
+  }
+
+  async function refreshSession(currentRefreshToken: string): Promise<boolean> {
+    try {
+      const response = await fetch(`${API_URL}/auth/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: currentRefreshToken }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        return false;
+      }
+
+      localStorage.setItem(TOKEN_KEY, data.access_token);
+      localStorage.setItem(REFRESH_TOKEN_KEY, data.refresh_token);
+      setToken(data.access_token);
+      setRefreshToken(data.refresh_token);
+      setMe(data.user);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function requestWithRetry<T>(path: string, options: RequestInit = {}): Promise<T> {
+    try {
+      return await api<T>(path, token, options);
+    } catch (err: unknown) {
+      const typed = err as Error & { status?: number };
+      if (typed.status === 401 && refreshToken) {
+        const ok = await refreshSession(refreshToken);
+        if (!ok) {
+          clearSession();
+          throw new Error("Session expired. Please login again.");
+        }
+        const latest = localStorage.getItem(TOKEN_KEY) ?? "";
+        return await api<T>(path, latest, options);
+      }
+
+      throw err;
     }
   }
 
   async function reload(authToken = token) {
     const [branchData, driverData, bookingData, tripData] = await Promise.all([
-      api<Branch[]>("/branches", authToken),
-      api<Driver[]>("/drivers", authToken),
-      api<{ items: Booking[] }>("/bookings?page=1&limit=50", authToken),
-      api<Trip[]>("/trips", authToken),
+      authToken === token ? requestWithRetry<Branch[]>("/branches") : api<Branch[]>("/branches", authToken),
+      authToken === token ? requestWithRetry<Driver[]>("/drivers") : api<Driver[]>("/drivers", authToken),
+      authToken === token ? requestWithRetry<{ items: Booking[] }>("/bookings?page=1&limit=50") : api<{ items: Booking[] }>("/bookings?page=1&limit=50", authToken),
+      authToken === token ? requestWithRetry<Trip[]>("/trips") : api<Trip[]>("/trips", authToken),
     ]);
 
     setBranches(branchData);
@@ -148,7 +212,9 @@ export default function OperationsPortalPage() {
       }
 
       localStorage.setItem(TOKEN_KEY, data.access_token);
+      localStorage.setItem(REFRESH_TOKEN_KEY, data.refresh_token);
       setToken(data.access_token);
+      setRefreshToken(data.refresh_token);
       setPassword("");
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Login failed";
@@ -160,7 +226,7 @@ export default function OperationsPortalPage() {
     event.preventDefault();
     try {
       setError("");
-      await api("/bookings", token, {
+      await requestWithRetry("/bookings", {
         method: "POST",
         body: JSON.stringify({
           ...bookingForm,
@@ -200,7 +266,7 @@ export default function OperationsPortalPage() {
     try {
       setError("");
       const selectedDriver = drivers.find((driver) => driver.id === assignment.driver_id);
-      await api("/trips", token, {
+      await requestWithRetry("/trips", {
         method: "POST",
         body: JSON.stringify({
           booking_id: assignment.booking_id,
@@ -211,7 +277,7 @@ export default function OperationsPortalPage() {
         }),
       });
 
-      await api(`/bookings/${assignment.booking_id}`, token, {
+      await requestWithRetry(`/bookings/${assignment.booking_id}`, {
         method: "PATCH",
         body: JSON.stringify({ status: "assigned" }),
       });
@@ -228,7 +294,7 @@ export default function OperationsPortalPage() {
     try {
       setError("");
       const selectedDriver = drivers.find((driver) => driver.id === driverId);
-      await api(`/trips/${tripId}`, token, {
+      await requestWithRetry(`/trips/${tripId}`, {
         method: "PATCH",
         body: JSON.stringify({
           driver_id: driverId,
@@ -244,9 +310,28 @@ export default function OperationsPortalPage() {
   }
 
   function logout() {
-    localStorage.removeItem(TOKEN_KEY);
-    setToken("");
-    setMe(null);
+    clearSession();
+  }
+
+  async function forgotPassword(event: FormEvent) {
+    event.preventDefault();
+    try {
+      setForgotMessage("");
+      setError("");
+      const response = await fetch(`${API_URL}/auth/forgot-password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: forgotEmail }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error ?? "Unable to send reset link");
+      }
+      setForgotMessage("Reset link sent. Check your email inbox.");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Unable to send reset link";
+      setError(message);
+    }
   }
 
   if (!token || !me) {
@@ -258,6 +343,12 @@ export default function OperationsPortalPage() {
           <input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Operations email" className="rounded-md border px-3 py-2" />
           <input required type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Password" className="rounded-md border px-3 py-2" />
           <button className="rounded-md bg-ocean px-4 py-2 font-semibold text-white">Login</button>
+        </form>
+        <form onSubmit={forgotPassword} className="mt-3 grid gap-2 rounded-xl bg-white p-4 shadow">
+          <p className="text-sm font-semibold">Forgot password</p>
+          <input required type="email" value={forgotEmail} onChange={(event) => setForgotEmail(event.target.value)} placeholder="Email for reset link" className="rounded-md border px-3 py-2" />
+          <button className="rounded-md border px-4 py-2 font-semibold">Send Reset Link</button>
+          {forgotMessage ? <p className="text-sm text-green-700">{forgotMessage}</p> : null}
         </form>
         {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}
       </main>
