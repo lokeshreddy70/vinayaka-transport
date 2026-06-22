@@ -98,7 +98,7 @@ export class RiderService {
     });
 
     // Filter by distance (simplified)
-    return riders.filter(rider => {
+    return riders.filter((rider: any) => {
       if (!rider.latitude || !rider.longitude) return false;
       const distance = this.calculateDistance(latitude, longitude, rider.latitude, rider.longitude);
       return distance <= radiusKm;

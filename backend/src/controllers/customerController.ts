@@ -5,6 +5,79 @@ import { sendSuccess, sendError } from '../utils/response';
 import { NotFoundError, ValidationError } from '../utils/errors';
 
 export class CustomerController {
+  async searchCustomers(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const query = String(req.query.q || '').trim();
+      const page = Number(req.query.page || 1);
+      const limit = Math.min(Number(req.query.limit || 20), 100);
+
+      const where = query
+        ? {
+            OR: [
+              { id: { contains: query, mode: 'insensitive' as const } },
+              { userId: { contains: query, mode: 'insensitive' as const } },
+              {
+                user: {
+                  fullName: { contains: query, mode: 'insensitive' as const },
+                },
+              },
+              {
+                user: {
+                  phoneNumber: { contains: query, mode: 'insensitive' as const },
+                },
+              },
+            ],
+          }
+        : {};
+
+      const [items, total] = await Promise.all([
+        prisma.customer.findMany({
+          where,
+          include: {
+            user: true,
+            wallet: true,
+          },
+          orderBy: { createdAt: 'desc' },
+          skip: (page - 1) * limit,
+          take: limit,
+        }),
+        prisma.customer.count({ where }),
+      ]);
+
+      sendSuccess(res, 200, 'Customers retrieved', { items, total, page, limit });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async getCustomerDetails(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { customerId } = req.params;
+
+      const customer = await prisma.customer.findUnique({
+        where: { id: customerId },
+        include: {
+          user: true,
+          addresses: true,
+          emergencyContacts: true,
+          wallet: { include: { transactions: { orderBy: { createdAt: 'desc' }, take: 50 } } },
+          orders: {
+            orderBy: { createdAt: 'desc' },
+            take: 100,
+          },
+        },
+      });
+
+      if (!customer) {
+        throw new NotFoundError('Customer not found');
+      }
+
+      sendSuccess(res, 200, 'Customer details retrieved', customer);
+    } catch (error) {
+      next(error);
+    }
+  }
+
   async getProfile(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
     try {
       if (!req.user) throw new ValidationError('User not authenticated');

@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useState } from 'react'
-import { Menu, X, Truck, MapPin, Users, TrendingUp } from 'lucide-react'
+import { Menu, X, Truck } from 'lucide-react'
 
 export default function Home() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
@@ -57,8 +57,8 @@ export default function Home() {
           </p>
 
           <div className="flex gap-4 justify-center mb-12">
-            <Link href="/customer" className="bg-orange-500 text-white px-8 py-3 rounded-lg font-semibold hover:bg-orange-600 transition">
-              Send Parcel
+            <Link href="/login" className="bg-orange-500 text-white px-8 py-3 rounded-lg font-semibold hover:bg-orange-600 transition">
+              Operations Login
             </Link>
             <Link href="/rider" className="bg-slate-700 text-white px-8 py-3 rounded-lg font-semibold hover:bg-slate-600 transition">
               Become a Rider

@@ -1,6 +1,5 @@
 import prisma from '../config/database';
 import { ValidationError, NotFoundError } from '../utils/errors';
-import logger from '../config/logger';
 
 export interface CreateOrderInput {
   customerId: string;
@@ -15,8 +14,18 @@ export interface CreateOrderInput {
   parcelValue: number;
   vehicleType: string;
   deliveryType: string;
+  paymentMethod?: string;
   isFragile?: boolean;
   specialInstructions?: string;
+}
+
+export interface ListOrdersInput {
+  status?: string;
+  paymentMethod?: string;
+  customerId?: string;
+  riderId?: string;
+  page: number;
+  limit: number;
 }
 
 export class OrderService {
@@ -80,12 +89,59 @@ export class OrderService {
         insuranceCharge: 0,
         totalPrice,
         finalPrice: totalPrice,
-        paymentMethod: 'UPI',
+        paymentMethod: (input.paymentMethod as any) || 'UPI',
         paymentStatus: 'PENDING',
       },
     });
 
+    await prisma.payment.create({
+      data: {
+        orderId: order.id,
+        amount: totalPrice,
+        paymentMethod: ((input.paymentMethod as any) || 'UPI') as any,
+        status: 'PENDING',
+      },
+    });
+
     return order;
+  }
+
+  async listOrders(input: ListOrdersInput): Promise<{ items: any[]; total: number; page: number; limit: number }> {
+    const where: any = {};
+
+    if (input.status) where.status = input.status as any;
+    if (input.paymentMethod) where.paymentMethod = input.paymentMethod as any;
+    if (input.customerId) where.customerId = input.customerId;
+    if (input.riderId) where.riderId = input.riderId;
+
+    const [items, total] = await Promise.all([
+      prisma.order.findMany({
+        where,
+        include: {
+          rider: {
+            include: {
+              user: true,
+            },
+          },
+          customer: {
+            include: {
+              user: true,
+            },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+        skip: (input.page - 1) * input.limit,
+        take: input.limit,
+      }),
+      prisma.order.count({ where }),
+    ]);
+
+    return {
+      items,
+      total,
+      page: input.page,
+      limit: input.limit,
+    };
   }
 
   async getOrder(orderId: string): Promise<any> {
@@ -134,18 +190,40 @@ export class OrderService {
       },
     });
 
+    await this.addTrackingLog(orderId, {
+      latitude: order.pickupLat,
+      longitude: order.pickupLng,
+      status: 'ASSIGNED',
+      accuracy: null,
+    });
+
     return updated;
   }
 
   async updateOrderStatus(orderId: string, status: string): Promise<any> {
-    const order = await prisma.order.update({
+    const order = await prisma.order.findUnique({ where: { id: orderId } });
+
+    if (!order) {
+      throw new NotFoundError('Order not found');
+    }
+
+    const updated = await prisma.order.update({
       where: { id: orderId },
       data: {
         status: status as any,
+        pickedUpAt: status === 'PICKED_UP' ? new Date() : undefined,
+        deliveredAt: status === 'DELIVERED' ? new Date() : undefined,
       },
     });
 
-    return order;
+    await this.addTrackingLog(orderId, {
+      latitude: order.dropLat,
+      longitude: order.dropLng,
+      status,
+      accuracy: null,
+    });
+
+    return updated;
   }
 
   async trackOrder(orderId: string): Promise<any> {
@@ -155,6 +233,92 @@ export class OrderService {
     });
 
     return trackingLogs;
+  }
+
+  async getPublicTracking(orderNumber: string): Promise<any> {
+    const order = await prisma.order.findUnique({
+      where: { orderNumber },
+      include: {
+        trackingLogs: {
+          orderBy: { timestamp: 'asc' },
+        },
+        rider: {
+          include: { user: true },
+        },
+      },
+    });
+
+    if (!order) {
+      throw new NotFoundError('Order not found');
+    }
+
+    return {
+      orderNumber: order.orderNumber,
+      status: order.status,
+      estimatedDeliveryTime: order.estimatedDeliveryTime,
+      rider: order.rider
+        ? {
+            name: order.rider.user.fullName,
+            phoneNumber: order.rider.user.phoneNumber,
+            latitude: order.rider.latitude,
+            longitude: order.rider.longitude,
+          }
+        : null,
+      timeline: order.trackingLogs,
+    };
+  }
+
+  async addTrackingLog(
+    orderId: string,
+    payload: { latitude: number; longitude: number; status: string; accuracy: number | null }
+  ): Promise<any> {
+    return prisma.trackingLog.create({
+      data: {
+        orderId,
+        latitude: payload.latitude,
+        longitude: payload.longitude,
+        status: payload.status as any,
+        accuracy: payload.accuracy || undefined,
+      },
+    });
+  }
+
+  async getReceiptData(orderId: string): Promise<any> {
+    const order = await prisma.order.findUnique({
+      where: { id: orderId },
+      include: {
+        customer: {
+          include: { user: true },
+        },
+        rider: {
+          include: { user: true },
+        },
+        payments: {
+          orderBy: { createdAt: 'desc' },
+        },
+      },
+    });
+
+    if (!order) {
+      throw new NotFoundError('Order not found');
+    }
+
+    return {
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      customerName: order.customer.user.fullName,
+      customerPhone: order.customer.user.phoneNumber,
+      riderName: order.rider?.user.fullName || null,
+      riderPhone: order.rider?.user.phoneNumber || null,
+      status: order.status,
+      paymentMethod: order.paymentMethod,
+      paymentStatus: order.paymentStatus,
+      totalPrice: order.totalPrice,
+      finalPrice: order.finalPrice,
+      createdAt: order.createdAt,
+      deliveredAt: order.deliveredAt,
+      payments: order.payments,
+    };
   }
 
   private calculateDistance(lat1: number, lng1: number, lat2: number, lng2: number): number {

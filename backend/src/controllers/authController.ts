@@ -6,6 +6,55 @@ import { ValidationError } from '../utils/errors';
 import logger from '../config/logger';
 
 export class AuthController {
+  async setPassword(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!req.user) {
+        throw new ValidationError('User not authenticated');
+      }
+
+      const { password } = req.body;
+      if (!password) {
+        throw new ValidationError('Password is required');
+      }
+
+      await authService.setPassword(req.user.userId, password);
+      sendSuccess(res, 200, 'Password updated successfully');
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async loginWithPassword(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { phoneNumber, password, deviceId, deviceInfo, role } = req.body;
+
+      if (!phoneNumber || !password || !deviceId) {
+        throw new ValidationError('Missing required fields');
+      }
+
+      const result = await authService.loginWithPassword(
+        phoneNumber,
+        password,
+        deviceId,
+        deviceInfo || 'unknown',
+        role
+      );
+
+      sendSuccess(res, 200, 'Login successful', {
+        user: {
+          id: result.user.id,
+          phoneNumber: result.user.phoneNumber,
+          fullName: result.user.fullName,
+          role: result.user.role,
+        },
+        accessToken: result.accessToken,
+        refreshToken: result.refreshToken,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   async sendOTP(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { phoneNumber } = req.body;
@@ -15,7 +64,10 @@ export class AuthController {
       }
 
       const result = await authService.sendOTP(phoneNumber);
-      sendSuccess(res, 200, 'OTP sent successfully', { expiresIn: '10 minutes' });
+      sendSuccess(res, 200, 'OTP sent successfully', {
+        expiresIn: '10 minutes',
+        ...(process.env.NODE_ENV !== 'production' ? { otp: result.otp } : {}),
+      });
     } catch (error) {
       next(error);
     }
@@ -98,12 +150,26 @@ export class AuthController {
     try {
       const { refreshToken } = req.body;
 
-      if (!req.user || !refreshToken) {
+      if (!refreshToken) {
         throw new ValidationError('Missing required fields');
       }
 
-      const result = await authService.refreshToken(req.user.userId, refreshToken);
+      const result = await authService.refreshToken(refreshToken);
       sendSuccess(res, 200, 'Token refreshed successfully', result);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async me(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
+    try {
+      if (!req.user) {
+        throw new ValidationError('User not authenticated');
+      }
+
+      const user = await authService.getCurrentUser(req.user.userId);
+
+      sendSuccess(res, 200, 'Current user retrieved', user);
     } catch (error) {
       next(error);
     }

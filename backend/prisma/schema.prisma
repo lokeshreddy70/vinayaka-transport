@@ -27,6 +27,7 @@ model User {
   isBusinessAccount     Boolean   @default(false)
   
   // Authentication
+  passwordHash          String?
   otpToken              String?
   otpExpiresAt          DateTime?
   jwtToken              String?
@@ -120,6 +121,9 @@ model Address {
   pinCode               String
   
   isDefault             Boolean   @default(false)
+
+  pickupOrders          Order[]   @relation("pickupAddress")
+  dropOrders            Order[]   @relation("dropAddress")
   
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt

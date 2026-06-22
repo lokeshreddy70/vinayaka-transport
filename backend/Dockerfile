@@ -1,29 +1,35 @@
-# Backend Dockerfile
+FROM node:20-alpine AS build
+
+WORKDIR /app
+
+COPY package*.json ./
+COPY backend/package*.json ./backend/
+
+RUN npm ci --include-workspace-root --workspace=backend
+
+COPY backend ./backend
+
+RUN npm run prisma:generate --workspace=backend
+RUN npm run build --workspace=backend
+
 FROM node:20-alpine
 
 WORKDIR /app
 
-# Copy package files
-COPY backend/package*.json ./
-RUN npm ci
+COPY package*.json ./
+COPY backend/package*.json ./backend/
 
-# Copy source code
-COPY backend/src ./src
-COPY backend/prisma ./prisma
-COPY backend/tsconfig.json ./
+RUN npm ci --omit=dev --include-workspace-root --workspace=backend
 
-# Build TypeScript
-RUN npm run build
+COPY --from=build /app/backend/dist ./backend/dist
+COPY --from=build /app/backend/prisma ./backend/prisma
+COPY --from=build /app/backend/node_modules/.prisma ./backend/node_modules/.prisma
 
-# Set environment
 ENV NODE_ENV=production
 
-# Expose port
 EXPOSE 3001
 
-# Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
   CMD node -e "require('http').get('http://localhost:3001/health', (r) => {if (r.statusCode !== 200) throw new Error(r.statusCode)})"
 
-# Start server
-CMD ["npm", "start"]
+CMD ["npm", "start", "--workspace=backend"]

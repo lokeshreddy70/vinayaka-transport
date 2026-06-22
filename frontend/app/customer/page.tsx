@@ -1,11 +1,79 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { Package, MapPin, DollarSign, User, LogOut, Menu, X, Home, History, Wallet } from 'lucide-react'
+import { useRouter } from 'next/navigation'
+import { Package, MapPin, User, LogOut, Menu, X, Home, History, Wallet } from 'lucide-react'
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
+const ACCESS_TOKEN_KEY = 'vinayaka_access_token'
+const REFRESH_TOKEN_KEY = 'vinayaka_refresh_token'
+
+type CustomerProfile = {
+  user: {
+    fullName: string
+  }
+  loyaltyPoints: number
+  totalSpent: number
+  wallet?: {
+    balance: number
+  } | null
+}
+
+type Order = {
+  id: string
+  orderNumber: string
+  status: string
+  finalPrice: number
+  createdAt: string
+}
 
 export default function CustomerDashboard() {
+  const router = useRouter()
   const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [profile, setProfile] = useState<CustomerProfile | null>(null)
+  const [orders, setOrders] = useState<Order[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    const token = window.localStorage.getItem(ACCESS_TOKEN_KEY)
+
+    if (!token) {
+      router.replace('/login')
+      return
+    }
+
+    Promise.all([
+      fetch(`${API_URL}/customers/profile`, {
+        headers: { Authorization: `Bearer ${token}` },
+      }).then((res) => res.json()),
+      fetch(`${API_URL}/customers/orders`, {
+        headers: { Authorization: `Bearer ${token}` },
+      }).then((res) => res.json()),
+    ])
+      .then(([profileResponse, ordersResponse]) => {
+        setProfile(profileResponse?.data || null)
+        setOrders(ordersResponse?.data || [])
+      })
+      .catch(() => {
+        window.localStorage.removeItem(ACCESS_TOKEN_KEY)
+        window.localStorage.removeItem(REFRESH_TOKEN_KEY)
+        router.replace('/login')
+      })
+      .finally(() => setLoading(false))
+  }, [router])
+
+  const activeOrders = useMemo(() => orders.filter((order) => order.status !== 'DELIVERED' && order.status !== 'CANCELLED').length, [orders])
+
+  const handleLogout = () => {
+    window.localStorage.removeItem(ACCESS_TOKEN_KEY)
+    window.localStorage.removeItem(REFRESH_TOKEN_KEY)
+    router.replace('/login')
+  }
+
+  if (loading) {
+    return <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center">Loading customer dashboard...</div>
+  }
 
   return (
     <div className="flex h-screen bg-slate-900">
@@ -35,7 +103,7 @@ export default function CustomerDashboard() {
         </nav>
 
         <div className="p-4 border-t border-slate-700">
-          <button className="flex items-center gap-3 w-full p-3 rounded-lg hover:bg-slate-700 transition text-gray-300 hover:text-white">
+          <button onClick={handleLogout} className="flex items-center gap-3 w-full p-3 rounded-lg hover:bg-slate-700 transition text-gray-300 hover:text-white">
             <LogOut className="w-5 h-5" />
             {sidebarOpen && <span>Logout</span>}
           </button>
@@ -46,10 +114,10 @@ export default function CustomerDashboard() {
       <div className="flex-1 overflow-auto">
         {/* Header */}
         <div className="bg-slate-800 border-b border-slate-700 px-8 py-6 flex justify-between items-center">
-          <h1 className="text-3xl font-bold text-white">Welcome back!</h1>
+          <h1 className="text-3xl font-bold text-white">Welcome back{profile?.user?.fullName ? `, ${profile.user.fullName}` : ''}!</h1>
           <div className="flex items-center gap-4">
             <div className="w-10 h-10 bg-orange-500 rounded-full flex items-center justify-center text-white font-bold">
-              R
+              {profile?.user?.fullName?.charAt(0)?.toUpperCase() || 'C'}
             </div>
           </div>
         </div>
@@ -59,10 +127,10 @@ export default function CustomerDashboard() {
           {/* Quick Stats */}
           <div className="grid md:grid-cols-4 gap-6">
             {[
-              { label: 'Active Orders', value: '0', icon: '📦', color: 'from-blue-500' },
-              { label: 'Total Spent', value: '₹0', icon: '💳', color: 'from-green-500' },
-              { label: 'Wallet Balance', value: '₹0', icon: '👛', color: 'from-orange-500' },
-              { label: 'Loyalty Points', value: '0', icon: '⭐', color: 'from-purple-500' },
+              { label: 'Active Orders', value: String(activeOrders), icon: '📦', color: 'from-blue-500' },
+              { label: 'Total Spent', value: `₹${profile?.totalSpent || 0}`, icon: '💳', color: 'from-green-500' },
+              { label: 'Wallet Balance', value: `₹${profile?.wallet?.balance || 0}`, icon: '👛', color: 'from-orange-500' },
+              { label: 'Loyalty Points', value: String(profile?.loyaltyPoints || 0), icon: '⭐', color: 'from-purple-500' },
             ].map((stat, i) => (
               <div key={i} className="bg-slate-800 border border-slate-700 rounded-lg p-6">
                 <div className="flex justify-between items-start">
@@ -87,9 +155,26 @@ export default function CustomerDashboard() {
           {/* Recent Orders */}
           <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
             <h3 className="text-xl font-bold mb-4">Recent Orders</h3>
-            <div className="text-center py-12 text-gray-400">
-              <p>No orders yet. <Link href="/customer/book" className="text-orange-500 hover:underline">Send your first parcel!</Link></p>
-            </div>
+            {orders.length === 0 ? (
+              <div className="text-center py-12 text-gray-400">
+                <p>No orders yet. <Link href="/customer/book" className="text-orange-500 hover:underline">Send your first parcel!</Link></p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {orders.slice(0, 5).map((order) => (
+                  <div key={order.id} className="rounded-lg bg-slate-700/50 p-4 flex justify-between items-center">
+                    <div>
+                      <p className="text-white font-semibold">{order.orderNumber}</p>
+                      <p className="text-gray-400 text-sm">{new Date(order.createdAt).toLocaleString()}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-orange-400 font-semibold">₹{order.finalPrice}</p>
+                      <p className="text-gray-300 text-sm">{order.status}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>
