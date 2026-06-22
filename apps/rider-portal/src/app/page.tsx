@@ -175,7 +175,11 @@ export default function RiderPortalPage() {
       setOtpSent(true);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Unable to send OTP";
-      setError(message);
+      if (message.toLowerCase().includes("unsupported phone provider")) {
+        setError("SMS provider is not enabled in backend auth settings. Ask admin to enable phone OTP provider and SMS credentials.");
+      } else {
+        setError(message);
+      }
     } finally {
       setAuthLoading(false);
     }
@@ -298,7 +302,7 @@ export default function RiderPortalPage() {
       <section className="mt-6 rounded-xl bg-white p-4 shadow">
         <h2 className="text-xl font-semibold">Upload Delivery Proof</h2>
         <form onSubmit={uploadProof} className="mt-3 grid gap-2 md:grid-cols-2">
-          <select required value={proofForm.trip_id} onChange={(event) => {
+          <select aria-label="Proof trip" required value={proofForm.trip_id} onChange={(event) => {
             const selectedTrip = trips.find((trip) => trip.id === event.target.value);
             setProofForm((value) => ({ ...value, trip_id: event.target.value, booking_id: selectedTrip?.booking_id ?? "" }));
           }} className="rounded-md border px-3 py-2">

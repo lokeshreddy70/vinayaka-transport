@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 
 type Role = "customer" | "driver" | "operations_staff" | "admin";
 
@@ -15,6 +15,8 @@ type Driver = { id: string; user_id: string; vehicle_id: string | null; is_appro
 type Booking = {
   id: string;
   tracking_id: string;
+  customer_user_id: string;
+  sender_phone: string;
   sender_name: string;
   receiver_name: string;
   pickup_address: string;
@@ -30,6 +32,15 @@ type Trip = {
   driver_id: string | null;
   status: string;
   fare_amount: number | null;
+  created_at?: string;
+};
+
+type AppUser = {
+  id: string;
+  full_name: string;
+  email: string;
+  role: Role;
+  phone: string | null;
 };
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "https://vinayaka-transport-api.vercel.app/api/v1";
@@ -71,6 +82,10 @@ export default function OperationsPortalPage() {
   const [drivers, setDrivers] = useState<Driver[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [trips, setTrips] = useState<Trip[]>([]);
+  const [users, setUsers] = useState<AppUser[]>([]);
+
+  const [riderSearch, setRiderSearch] = useState("");
+  const [customerSearch, setCustomerSearch] = useState("");
 
   const [bookingForm, setBookingForm] = useState({
     branch_id: "",
@@ -184,18 +199,88 @@ export default function OperationsPortalPage() {
   }
 
   async function reload(authToken = token) {
-    const [branchData, driverData, bookingData, tripData] = await Promise.all([
+    const [branchData, driverData, bookingData, tripData, userData] = await Promise.all([
       authToken === token ? requestWithRetry<Branch[]>("/branches") : api<Branch[]>("/branches", authToken),
       authToken === token ? requestWithRetry<Driver[]>("/drivers") : api<Driver[]>("/drivers", authToken),
       authToken === token ? requestWithRetry<{ items: Booking[] }>("/bookings?page=1&limit=50") : api<{ items: Booking[] }>("/bookings?page=1&limit=50", authToken),
       authToken === token ? requestWithRetry<Trip[]>("/trips") : api<Trip[]>("/trips", authToken),
+      authToken === token ? requestWithRetry<AppUser[]>("/users") : api<AppUser[]>("/users", authToken),
     ]);
 
     setBranches(branchData);
     setDrivers(driverData.filter((driver) => driver.is_approved));
     setBookings(bookingData.items ?? []);
     setTrips(tripData);
+    setUsers(userData);
   }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const riderUsers = useMemo(() => {
+    const term = riderSearch.trim().toLowerCase();
+    return users.filter((user) => {
+      if (user.role !== "driver") {
+        return false;
+      }
+      if (!term) {
+        return true;
+      }
+      return [user.full_name, user.email, user.phone ?? ""].some((value) => value.toLowerCase().includes(term));
+    });
+  }, [users, riderSearch]);
+
+  const customerUsers = useMemo(() => {
+    const term = customerSearch.trim().toLowerCase();
+    return users.filter((user) => {
+      if (user.role !== "customer") {
+        return false;
+      }
+      if (!term) {
+        return true;
+      }
+      return [user.full_name, user.email, user.phone ?? ""].some((value) => value.toLowerCase().includes(term));
+    });
+  }, [users, customerSearch]);
+
+  const riderAttendance = useMemo(() => {
+    const driverMap = new Map<string, string>();
+    for (const driver of drivers) {
+      driverMap.set(driver.id, driver.user_id);
+    }
+
+    const present = new Set<string>();
+    for (const trip of trips) {
+      if (!trip.driver_id || !trip.created_at?.startsWith(today)) {
+        continue;
+      }
+      const userId = driverMap.get(trip.driver_id);
+      if (userId) {
+        present.add(userId);
+      }
+    }
+    return present;
+  }, [drivers, trips, today]);
+
+  const customerAttendance = useMemo(() => {
+    const present = new Set<string>();
+    for (const booking of bookings) {
+      if (booking.created_at?.startsWith(today)) {
+        present.add(booking.customer_user_id);
+      }
+    }
+    return present;
+  }, [bookings, today]);
+
+  const riderTripCount = (userId: string) => {
+    const driverIds = drivers.filter((driver) => driver.user_id === userId).map((driver) => driver.id);
+    if (!driverIds.length) {
+      return 0;
+    }
+    return trips.filter((trip) => trip.driver_id && driverIds.includes(trip.driver_id)).length;
+  };
+
+  const customerBookingCount = (userId: string, phone: string | null) => {
+    return bookings.filter((booking) => booking.customer_user_id === userId || (!!phone && booking.sender_phone === phone)).length;
+  };
 
   async function login(event: FormEvent) {
     event.preventDefault();
@@ -371,7 +456,7 @@ export default function OperationsPortalPage() {
         <form onSubmit={createManualBooking} className="rounded-xl bg-white p-4 shadow">
           <h2 className="text-xl font-semibold">Create Manual Booking</h2>
           <div className="mt-3 grid gap-2">
-            <select required value={bookingForm.branch_id} onChange={(event) => setBookingForm((value) => ({ ...value, branch_id: event.target.value }))} className="rounded-md border px-3 py-2">
+            <select aria-label="Booking branch" required value={bookingForm.branch_id} onChange={(event) => setBookingForm((value) => ({ ...value, branch_id: event.target.value }))} className="rounded-md border px-3 py-2">
               <option value="">Select branch</option>
               {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
             </select>
@@ -389,7 +474,7 @@ export default function OperationsPortalPage() {
               <input required type="number" step="0.0001" value={bookingForm.drop_lat} onChange={(event) => setBookingForm((value) => ({ ...value, drop_lat: event.target.value }))} placeholder="Drop lat" className="rounded-md border px-3 py-2" />
               <input required type="number" step="0.0001" value={bookingForm.drop_lng} onChange={(event) => setBookingForm((value) => ({ ...value, drop_lng: event.target.value }))} placeholder="Drop lng" className="rounded-md border px-3 py-2" />
             </div>
-            <select value={bookingForm.vehicle_type} onChange={(event) => setBookingForm((value) => ({ ...value, vehicle_type: event.target.value }))} className="rounded-md border px-3 py-2">
+            <select aria-label="Booking vehicle type" value={bookingForm.vehicle_type} onChange={(event) => setBookingForm((value) => ({ ...value, vehicle_type: event.target.value }))} className="rounded-md border px-3 py-2">
               <option value="bike">Bike</option>
               <option value="auto">Auto</option>
               <option value="car">Car</option>
@@ -406,13 +491,13 @@ export default function OperationsPortalPage() {
         <form onSubmit={assignDriver} className="rounded-xl bg-white p-4 shadow">
           <h2 className="text-xl font-semibold">Assign Driver</h2>
           <div className="mt-3 grid gap-2">
-            <select required value={assignment.booking_id} onChange={(event) => setAssignment((value) => ({ ...value, booking_id: event.target.value }))} className="rounded-md border px-3 py-2">
+            <select aria-label="Assignment booking" required value={assignment.booking_id} onChange={(event) => setAssignment((value) => ({ ...value, booking_id: event.target.value }))} className="rounded-md border px-3 py-2">
               <option value="">Select booking</option>
               {bookings.filter((booking) => booking.status === "booked" || booking.status === "assigned").map((booking) => (
                 <option key={booking.id} value={booking.id}>{booking.tracking_id} - {booking.sender_name}</option>
               ))}
             </select>
-            <select required value={assignment.driver_id} onChange={(event) => setAssignment((value) => ({ ...value, driver_id: event.target.value }))} className="rounded-md border px-3 py-2">
+            <select aria-label="Assignment driver" required value={assignment.driver_id} onChange={(event) => setAssignment((value) => ({ ...value, driver_id: event.target.value }))} className="rounded-md border px-3 py-2">
               <option value="">Select driver</option>
               {drivers.map((driver) => (
                 <option key={driver.id} value={driver.id}>{driver.id.slice(0, 8)} - {driver.status}</option>
@@ -464,6 +549,62 @@ export default function OperationsPortalPage() {
             </div>
           ))}
           {trips.length === 0 ? <p className="text-sm text-slate-600">No trips yet.</p> : null}
+        </div>
+      </section>
+
+      <section className="mt-6 grid gap-6 lg:grid-cols-2">
+        <div className="rounded-xl bg-white p-4 shadow">
+          <h2 className="text-xl font-semibold">Rider History</h2>
+          <input value={riderSearch} onChange={(event) => setRiderSearch(event.target.value)} placeholder="Search rider by name, email, phone" className="mt-3 w-full rounded-md border px-3 py-2" />
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead>
+                <tr className="border-b">
+                  <th className="py-2">Rider</th>
+                  <th className="py-2">Phone</th>
+                  <th className="py-2">Trips</th>
+                  <th className="py-2">Attendance</th>
+                </tr>
+              </thead>
+              <tbody>
+                {riderUsers.map((user) => (
+                  <tr key={user.id} className="border-b">
+                    <td className="py-2">{user.full_name}</td>
+                    <td className="py-2">{user.phone ?? "-"}</td>
+                    <td className="py-2">{riderTripCount(user.id)}</td>
+                    <td className="py-2">{riderAttendance.has(user.id) ? "Present" : "Absent"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="rounded-xl bg-white p-4 shadow">
+          <h2 className="text-xl font-semibold">Customer History</h2>
+          <input value={customerSearch} onChange={(event) => setCustomerSearch(event.target.value)} placeholder="Search customer by name, email, phone" className="mt-3 w-full rounded-md border px-3 py-2" />
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead>
+                <tr className="border-b">
+                  <th className="py-2">Customer</th>
+                  <th className="py-2">Phone</th>
+                  <th className="py-2">Bookings</th>
+                  <th className="py-2">Attendance</th>
+                </tr>
+              </thead>
+              <tbody>
+                {customerUsers.map((user) => (
+                  <tr key={user.id} className="border-b">
+                    <td className="py-2">{user.full_name}</td>
+                    <td className="py-2">{user.phone ?? "-"}</td>
+                    <td className="py-2">{customerBookingCount(user.id, user.phone)}</td>
+                    <td className="py-2">{customerAttendance.has(user.id) ? "Present" : "Absent"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
     </main>

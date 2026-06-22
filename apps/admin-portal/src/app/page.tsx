@@ -39,6 +39,30 @@ type AppUser = {
   phone: string | null;
 };
 
+type DriverRecord = {
+  id: string;
+  user_id: string;
+  status: string;
+  is_approved: boolean;
+};
+
+type BookingHistory = {
+  id: string;
+  tracking_id: string;
+  customer_user_id: string;
+  sender_phone: string;
+  status: string;
+  created_at: string;
+};
+
+type TripHistory = {
+  id: string;
+  driver_id: string | null;
+  booking_id: string;
+  status: string;
+  created_at: string;
+};
+
 type Complaint = {
   id: string;
   title: string;
@@ -86,7 +110,13 @@ export default function AdminPortalPage() {
   const [branches, setBranches] = useState<Branch[]>([]);
   const [pricingRules, setPricingRules] = useState<PricingRule[]>([]);
   const [users, setUsers] = useState<AppUser[]>([]);
+  const [drivers, setDrivers] = useState<DriverRecord[]>([]);
+  const [bookingHistory, setBookingHistory] = useState<BookingHistory[]>([]);
+  const [tripHistory, setTripHistory] = useState<TripHistory[]>([]);
   const [complaints, setComplaints] = useState<Complaint[]>([]);
+
+  const [riderSearch, setRiderSearch] = useState("");
+  const [customerSearch, setCustomerSearch] = useState("");
 
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
@@ -186,11 +216,14 @@ export default function AdminPortalPage() {
   }
 
   async function reloadAll(authToken = token) {
-    const [dashboard, branchData, ruleData, userData, complaintData] = await Promise.all([
+    const [dashboard, branchData, ruleData, userData, driverData, bookingData, tripData, complaintData] = await Promise.all([
       authToken === token ? requestWithRetry<DashboardCounts>("/analytics/dashboard") : api<DashboardCounts>("/analytics/dashboard", {}, authToken),
       authToken === token ? requestWithRetry<Branch[]>("/branches") : api<Branch[]>("/branches", {}, authToken),
       authToken === token ? requestWithRetry<PricingRule[]>("/pricing_rules") : api<PricingRule[]>("/pricing_rules", {}, authToken),
       authToken === token ? requestWithRetry<AppUser[]>("/users") : api<AppUser[]>("/users", {}, authToken),
+      authToken === token ? requestWithRetry<DriverRecord[]>("/drivers") : api<DriverRecord[]>("/drivers", {}, authToken),
+      authToken === token ? requestWithRetry<{ items: BookingHistory[] }>("/bookings?page=1&limit=200") : api<{ items: BookingHistory[] }>("/bookings?page=1&limit=200", {}, authToken),
+      authToken === token ? requestWithRetry<TripHistory[]>("/trips") : api<TripHistory[]>("/trips", {}, authToken),
       authToken === token ? requestWithRetry<Complaint[]>("/complaints") : api<Complaint[]>("/complaints", {}, authToken),
     ]);
 
@@ -198,7 +231,36 @@ export default function AdminPortalPage() {
     setBranches(branchData);
     setPricingRules(ruleData);
     setUsers(userData);
+    setDrivers(driverData);
+    setBookingHistory(bookingData.items ?? []);
+    setTripHistory(tripData);
     setComplaints(complaintData);
+  }
+
+  async function ensureDefaultBranches() {
+    try {
+      setError("");
+      const existing = new Set(branches.map((branch) => branch.name.trim().toLowerCase()));
+      const defaults = [
+        { name: "Nellore Hub", city: "Nellore", latitude: 14.4426, longitude: 79.9865, radius_km: 35 },
+        { name: "Podalakur Hub", city: "Podalakur", latitude: 14.3844, longitude: 79.9267, radius_km: 20 },
+        { name: "Tirupati Hub", city: "Tirupati", latitude: 13.6288, longitude: 79.4192, radius_km: 30 },
+      ];
+
+      for (const branch of defaults) {
+        if (!existing.has(branch.name.toLowerCase())) {
+          await requestWithRetry("/branches", {
+            method: "POST",
+            body: JSON.stringify(branch),
+          });
+        }
+      }
+
+      await reloadAll();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Unable to create default branches";
+      setError(message);
+    }
   }
 
   async function handleLogin(event: FormEvent) {
@@ -336,6 +398,77 @@ export default function AdminPortalPage() {
 
   const totalRevenue = useMemo(() => counts.payments ?? 0, [counts]);
 
+  const driverById = useMemo(() => {
+    const map = new Map<string, DriverRecord>();
+    for (const driver of drivers) {
+      map.set(driver.id, driver);
+    }
+    return map;
+  }, [drivers]);
+
+  const today = new Date().toISOString().slice(0, 10);
+  const riderAttendance = useMemo(() => {
+    const present = new Set<string>();
+    for (const trip of tripHistory) {
+      if (!trip.driver_id || !trip.created_at?.startsWith(today)) {
+        continue;
+      }
+      const driver = driverById.get(trip.driver_id);
+      if (driver) {
+        present.add(driver.user_id);
+      }
+    }
+    return present;
+  }, [tripHistory, driverById, today]);
+
+  const customerAttendance = useMemo(() => {
+    const present = new Set<string>();
+    for (const booking of bookingHistory) {
+      if (booking.created_at?.startsWith(today)) {
+        present.add(booking.customer_user_id);
+      }
+    }
+    return present;
+  }, [bookingHistory, today]);
+
+  const riderUsers = useMemo(() => {
+    const term = riderSearch.trim().toLowerCase();
+    return users.filter((user) => {
+      if (user.role !== "driver") {
+        return false;
+      }
+      if (!term) {
+        return true;
+      }
+      return [user.full_name, user.email, user.phone ?? ""].some((value) => value.toLowerCase().includes(term));
+    });
+  }, [users, riderSearch]);
+
+  const customerUsers = useMemo(() => {
+    const term = customerSearch.trim().toLowerCase();
+    return users.filter((user) => {
+      if (user.role !== "customer") {
+        return false;
+      }
+      if (!term) {
+        return true;
+      }
+      return [user.full_name, user.email, user.phone ?? ""].some((value) => value.toLowerCase().includes(term));
+    });
+  }, [users, customerSearch]);
+
+  const riderTripCount = (userId: string) => {
+    const driverIds = drivers.filter((driver) => driver.user_id === userId).map((driver) => driver.id);
+    if (!driverIds.length) {
+      return 0;
+    }
+    return tripHistory.filter((trip) => trip.driver_id && driverIds.includes(trip.driver_id)).length;
+  };
+
+  const customerBookingCount = (userId: string, phone: string | null) => {
+    return bookingHistory.filter((booking) => booking.customer_user_id === userId || (!!phone && booking.sender_phone === phone)).length;
+  };
+
   if (!token || !me) {
     return (
       <main className="mx-auto max-w-xl p-6">
@@ -387,7 +520,7 @@ export default function AdminPortalPage() {
             <input required value={newUser.full_name} onChange={(event) => setNewUser((value) => ({ ...value, full_name: event.target.value }))} placeholder="Full name" className="rounded-md border px-3 py-2" />
             <input required type="email" value={newUser.email} onChange={(event) => setNewUser((value) => ({ ...value, email: event.target.value }))} placeholder="Email" className="rounded-md border px-3 py-2" />
             <input value={newUser.phone} onChange={(event) => setNewUser((value) => ({ ...value, phone: event.target.value }))} placeholder="Phone" className="rounded-md border px-3 py-2" />
-            <select value={newUser.role} onChange={(event) => setNewUser((value) => ({ ...value, role: event.target.value as Role }))} className="rounded-md border px-3 py-2">
+            <select aria-label="User role" value={newUser.role} onChange={(event) => setNewUser((value) => ({ ...value, role: event.target.value as Role }))} className="rounded-md border px-3 py-2">
               <option value="admin">Admin</option>
               <option value="operations_staff">Operations Staff</option>
               <option value="driver">Driver</option>
@@ -408,6 +541,7 @@ export default function AdminPortalPage() {
             </div>
             <input required type="number" step="0.1" value={newBranch.radius_km} onChange={(event) => setNewBranch((value) => ({ ...value, radius_km: event.target.value }))} placeholder="Radius (km)" className="rounded-md border px-3 py-2" />
             <button className="rounded-md bg-ocean px-4 py-2 font-semibold text-white">Create Branch</button>
+            <button type="button" onClick={ensureDefaultBranches} className="rounded-md border px-4 py-2 font-semibold">Add Tirupati + Nellore + Podalakur</button>
           </div>
         </form>
       </section>
@@ -415,13 +549,13 @@ export default function AdminPortalPage() {
       <section className="mt-6 rounded-xl bg-white p-4 shadow">
         <h2 className="text-xl font-semibold">Pricing Rules</h2>
         <form onSubmit={createPricingRule} className="mt-3 grid gap-2 md:grid-cols-4">
-          <select required value={newRule.branch_id} onChange={(event) => setNewRule((value) => ({ ...value, branch_id: event.target.value }))} className="rounded-md border px-3 py-2">
+          <select aria-label="Pricing branch" required value={newRule.branch_id} onChange={(event) => setNewRule((value) => ({ ...value, branch_id: event.target.value }))} className="rounded-md border px-3 py-2">
             <option value="">Select branch</option>
             {branches.map((branch) => (
               <option key={branch.id} value={branch.id}>{branch.name}</option>
             ))}
           </select>
-          <select value={newRule.vehicle_type} onChange={(event) => setNewRule((value) => ({ ...value, vehicle_type: event.target.value as "bike" | "auto" | "car" }))} className="rounded-md border px-3 py-2">
+          <select aria-label="Vehicle type" value={newRule.vehicle_type} onChange={(event) => setNewRule((value) => ({ ...value, vehicle_type: event.target.value as "bike" | "auto" | "car" }))} className="rounded-md border px-3 py-2">
             <option value="bike">Bike</option>
             <option value="auto">Auto</option>
             <option value="car">Car</option>
@@ -504,6 +638,62 @@ export default function AdminPortalPage() {
               </div>
             ))}
             {complaints.length === 0 ? <p className="text-sm text-slate-600">No complaints found.</p> : null}
+          </div>
+        </div>
+      </section>
+
+      <section className="mt-6 grid gap-6 lg:grid-cols-2">
+        <div className="rounded-xl bg-white p-4 shadow">
+          <h2 className="text-xl font-semibold">Rider History</h2>
+          <input value={riderSearch} onChange={(event) => setRiderSearch(event.target.value)} placeholder="Search rider by name, email, phone" className="mt-3 w-full rounded-md border px-3 py-2" />
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead>
+                <tr className="border-b">
+                  <th className="py-2">Rider</th>
+                  <th className="py-2">Phone</th>
+                  <th className="py-2">Trips</th>
+                  <th className="py-2">Attendance</th>
+                </tr>
+              </thead>
+              <tbody>
+                {riderUsers.map((user) => (
+                  <tr key={user.id} className="border-b">
+                    <td className="py-2">{user.full_name}</td>
+                    <td className="py-2">{user.phone ?? "-"}</td>
+                    <td className="py-2">{riderTripCount(user.id)}</td>
+                    <td className="py-2">{riderAttendance.has(user.id) ? "Present" : "Absent"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="rounded-xl bg-white p-4 shadow">
+          <h2 className="text-xl font-semibold">Customer History</h2>
+          <input value={customerSearch} onChange={(event) => setCustomerSearch(event.target.value)} placeholder="Search customer by name, email, phone" className="mt-3 w-full rounded-md border px-3 py-2" />
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead>
+                <tr className="border-b">
+                  <th className="py-2">Customer</th>
+                  <th className="py-2">Phone</th>
+                  <th className="py-2">Bookings</th>
+                  <th className="py-2">Attendance</th>
+                </tr>
+              </thead>
+              <tbody>
+                {customerUsers.map((user) => (
+                  <tr key={user.id} className="border-b">
+                    <td className="py-2">{user.full_name}</td>
+                    <td className="py-2">{user.phone ?? "-"}</td>
+                    <td className="py-2">{customerBookingCount(user.id, user.phone)}</td>
+                    <td className="py-2">{customerAttendance.has(user.id) ? "Present" : "Absent"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       </section>
