@@ -1,42 +1,380 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/v1";
+type Role = "customer" | "driver" | "operations_staff" | "admin";
 
-export default function Page() {
-  const [orders, setOrders] = useState<any[]>([]);
+type AuthUser = {
+  id: string;
+  full_name: string;
+  role: Role;
+};
+
+type Branch = { id: string; name: string };
+type Driver = { id: string; user_id: string; vehicle_id: string | null; is_approved: boolean; status: string };
+type Booking = {
+  id: string;
+  tracking_id: string;
+  sender_name: string;
+  receiver_name: string;
+  pickup_address: string;
+  drop_address: string;
+  status: string;
+  branch_id: string;
+  created_at: string;
+};
+
+type Trip = {
+  id: string;
+  booking_id: string;
+  driver_id: string | null;
+  status: string;
+  fare_amount: number | null;
+};
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "https://vinayaka-transport-api.vercel.app/api/v1";
+const TOKEN_KEY = "vinayaka_operations_token";
+
+async function api<T>(path: string, token: string, options: RequestInit = {}): Promise<T> {
+  const response = await fetch(`${API_URL}${path}`, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+      ...(options.headers ?? {}),
+    },
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error ?? "Request failed");
+  }
+
+  return data as T;
+}
+
+export default function OperationsPortalPage() {
+  const [token, setToken] = useState("");
+  const [me, setMe] = useState<AuthUser | null>(null);
+  const [error, setError] = useState("");
+
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+
+  const [branches, setBranches] = useState<Branch[]>([]);
+  const [drivers, setDrivers] = useState<Driver[]>([]);
+  const [bookings, setBookings] = useState<Booking[]>([]);
+  const [trips, setTrips] = useState<Trip[]>([]);
+
+  const [bookingForm, setBookingForm] = useState({
+    branch_id: "",
+    sender_name: "",
+    sender_phone: "",
+    receiver_name: "",
+    receiver_phone: "",
+    pickup_address: "",
+    pickup_lat: "",
+    pickup_lng: "",
+    drop_address: "",
+    drop_lat: "",
+    drop_lng: "",
+    vehicle_type: "bike",
+    cod_required: false,
+    cod_amount: "",
+  });
+
+  const [assignment, setAssignment] = useState({ booking_id: "", driver_id: "" });
 
   useEffect(() => {
-    fetch(`${API_URL}/orders?page=1&limit=20`)
-      .then((res) => res.json())
-      .then((data) => setOrders(data.items ?? []));
+    const stored = localStorage.getItem(TOKEN_KEY) ?? "";
+    if (stored) {
+      setToken(stored);
+    }
   }, []);
 
+  useEffect(() => {
+    if (!token) {
+      return;
+    }
+
+    void loadSession(token);
+  }, [token]);
+
+  async function loadSession(authToken: string) {
+    try {
+      setError("");
+      const profile = await api<{ user: AuthUser }>("/auth/me", authToken);
+      if (profile.user.role !== "operations_staff" && profile.user.role !== "admin") {
+        throw new Error("Operations access required");
+      }
+
+      setMe(profile.user);
+      await reload(authToken);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Failed to load operations portal";
+      setError(message);
+      localStorage.removeItem(TOKEN_KEY);
+      setToken("");
+      setMe(null);
+    }
+  }
+
+  async function reload(authToken = token) {
+    const [branchData, driverData, bookingData, tripData] = await Promise.all([
+      api<Branch[]>("/branches", authToken),
+      api<Driver[]>("/drivers", authToken),
+      api<{ items: Booking[] }>("/bookings?page=1&limit=50", authToken),
+      api<Trip[]>("/trips", authToken),
+    ]);
+
+    setBranches(branchData);
+    setDrivers(driverData.filter((driver) => driver.is_approved));
+    setBookings(bookingData.items ?? []);
+    setTrips(tripData);
+  }
+
+  async function login(event: FormEvent) {
+    event.preventDefault();
+    try {
+      setError("");
+      const response = await fetch(`${API_URL}/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error ?? "Invalid credentials");
+      }
+
+      localStorage.setItem(TOKEN_KEY, data.access_token);
+      setToken(data.access_token);
+      setPassword("");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Login failed";
+      setError(message);
+    }
+  }
+
+  async function createManualBooking(event: FormEvent) {
+    event.preventDefault();
+    try {
+      setError("");
+      await api("/bookings", token, {
+        method: "POST",
+        body: JSON.stringify({
+          ...bookingForm,
+          pickup_lat: Number(bookingForm.pickup_lat),
+          pickup_lng: Number(bookingForm.pickup_lng),
+          drop_lat: Number(bookingForm.drop_lat),
+          drop_lng: Number(bookingForm.drop_lng),
+          cod_amount: bookingForm.cod_amount ? Number(bookingForm.cod_amount) : undefined,
+        }),
+      });
+
+      setBookingForm({
+        branch_id: "",
+        sender_name: "",
+        sender_phone: "",
+        receiver_name: "",
+        receiver_phone: "",
+        pickup_address: "",
+        pickup_lat: "",
+        pickup_lng: "",
+        drop_address: "",
+        drop_lat: "",
+        drop_lng: "",
+        vehicle_type: "bike",
+        cod_required: false,
+        cod_amount: "",
+      });
+      await reload();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Unable to create booking";
+      setError(message);
+    }
+  }
+
+  async function assignDriver(event: FormEvent) {
+    event.preventDefault();
+    try {
+      setError("");
+      const selectedDriver = drivers.find((driver) => driver.id === assignment.driver_id);
+      await api("/trips", token, {
+        method: "POST",
+        body: JSON.stringify({
+          booking_id: assignment.booking_id,
+          driver_id: assignment.driver_id,
+          vehicle_id: selectedDriver?.vehicle_id ?? null,
+          assigned_by_user_id: me?.id,
+          status: "assigned",
+        }),
+      });
+
+      await api(`/bookings/${assignment.booking_id}`, token, {
+        method: "PATCH",
+        body: JSON.stringify({ status: "assigned" }),
+      });
+
+      setAssignment({ booking_id: "", driver_id: "" });
+      await reload();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Unable to assign driver";
+      setError(message);
+    }
+  }
+
+  async function reassignTrip(tripId: string, driverId: string) {
+    try {
+      setError("");
+      const selectedDriver = drivers.find((driver) => driver.id === driverId);
+      await api(`/trips/${tripId}`, token, {
+        method: "PATCH",
+        body: JSON.stringify({
+          driver_id: driverId,
+          vehicle_id: selectedDriver?.vehicle_id ?? null,
+          status: "assigned",
+        }),
+      });
+      await reload();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Unable to reassign trip";
+      setError(message);
+    }
+  }
+
+  function logout() {
+    localStorage.removeItem(TOKEN_KEY);
+    setToken("");
+    setMe(null);
+  }
+
+  if (!token || !me) {
+    return (
+      <main className="mx-auto max-w-lg p-6">
+        <h1 className="text-3xl font-bold text-ocean">Vinayaka Operations Counter Portal</h1>
+        <p className="mt-2 text-slate-600">Quick booking, dispatch, parcel storage, and cash close workflows.</p>
+        <form onSubmit={login} className="mt-6 grid gap-3 rounded-xl bg-white p-4 shadow">
+          <input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Operations email" className="rounded-md border px-3 py-2" />
+          <input required type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Password" className="rounded-md border px-3 py-2" />
+          <button className="rounded-md bg-ocean px-4 py-2 font-semibold text-white">Login</button>
+        </form>
+        {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}
+      </main>
+    );
+  }
+
   return (
-    <main style={{ maxWidth: 1100, margin: "0 auto", padding: 24 }}>
-      <h1>Vinayaka Operations Counter Portal</h1>
-      <p>Quick booking, dispatch, parcel storage, and cash close workflows.</p>
-      <table style={{ width: "100%", marginTop: 16, background: "#fff", borderRadius: 12, padding: 16 }}>
-        <thead>
-          <tr>
-            <th align="left">Tracking</th>
-            <th align="left">Status</th>
-            <th align="left">Route</th>
-            <th align="left">Fare</th>
-          </tr>
-        </thead>
-        <tbody>
-          {orders.map((order) => (
-            <tr key={order.id}>
-              <td>{order.trackingNumber}</td>
-              <td>{order.status}</td>
-              <td>{order.pickupAddress} to {order.dropAddress}</td>
-              <td>{order.finalFare}</td>
-            </tr>
+    <main className="mx-auto max-w-[1200px] px-6 py-6">
+      <header className="flex items-center justify-between gap-3">
+        <div>
+          <h1 className="text-3xl font-bold text-ocean">Vinayaka Operations Counter Portal</h1>
+          <p className="mt-1 text-slate-600">Manage bookings, assignments, trips, tracking, and payment workflows.</p>
+        </div>
+        <button onClick={logout} className="rounded-md border px-3 py-2">Logout</button>
+      </header>
+
+      {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}
+
+      <section className="mt-6 grid gap-6 lg:grid-cols-2">
+        <form onSubmit={createManualBooking} className="rounded-xl bg-white p-4 shadow">
+          <h2 className="text-xl font-semibold">Create Manual Booking</h2>
+          <div className="mt-3 grid gap-2">
+            <select required value={bookingForm.branch_id} onChange={(event) => setBookingForm((value) => ({ ...value, branch_id: event.target.value }))} className="rounded-md border px-3 py-2">
+              <option value="">Select branch</option>
+              {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
+            </select>
+            <input required value={bookingForm.sender_name} onChange={(event) => setBookingForm((value) => ({ ...value, sender_name: event.target.value }))} placeholder="Sender name" className="rounded-md border px-3 py-2" />
+            <input required value={bookingForm.sender_phone} onChange={(event) => setBookingForm((value) => ({ ...value, sender_phone: event.target.value }))} placeholder="Sender phone" className="rounded-md border px-3 py-2" />
+            <input required value={bookingForm.receiver_name} onChange={(event) => setBookingForm((value) => ({ ...value, receiver_name: event.target.value }))} placeholder="Receiver name" className="rounded-md border px-3 py-2" />
+            <input required value={bookingForm.receiver_phone} onChange={(event) => setBookingForm((value) => ({ ...value, receiver_phone: event.target.value }))} placeholder="Receiver phone" className="rounded-md border px-3 py-2" />
+            <input required value={bookingForm.pickup_address} onChange={(event) => setBookingForm((value) => ({ ...value, pickup_address: event.target.value }))} placeholder="Pickup address" className="rounded-md border px-3 py-2" />
+            <div className="grid grid-cols-2 gap-2">
+              <input required type="number" step="0.0001" value={bookingForm.pickup_lat} onChange={(event) => setBookingForm((value) => ({ ...value, pickup_lat: event.target.value }))} placeholder="Pickup lat" className="rounded-md border px-3 py-2" />
+              <input required type="number" step="0.0001" value={bookingForm.pickup_lng} onChange={(event) => setBookingForm((value) => ({ ...value, pickup_lng: event.target.value }))} placeholder="Pickup lng" className="rounded-md border px-3 py-2" />
+            </div>
+            <input required value={bookingForm.drop_address} onChange={(event) => setBookingForm((value) => ({ ...value, drop_address: event.target.value }))} placeholder="Drop address" className="rounded-md border px-3 py-2" />
+            <div className="grid grid-cols-2 gap-2">
+              <input required type="number" step="0.0001" value={bookingForm.drop_lat} onChange={(event) => setBookingForm((value) => ({ ...value, drop_lat: event.target.value }))} placeholder="Drop lat" className="rounded-md border px-3 py-2" />
+              <input required type="number" step="0.0001" value={bookingForm.drop_lng} onChange={(event) => setBookingForm((value) => ({ ...value, drop_lng: event.target.value }))} placeholder="Drop lng" className="rounded-md border px-3 py-2" />
+            </div>
+            <select value={bookingForm.vehicle_type} onChange={(event) => setBookingForm((value) => ({ ...value, vehicle_type: event.target.value }))} className="rounded-md border px-3 py-2">
+              <option value="bike">Bike</option>
+              <option value="auto">Auto</option>
+              <option value="car">Car</option>
+            </select>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={bookingForm.cod_required} onChange={(event) => setBookingForm((value) => ({ ...value, cod_required: event.target.checked }))} />
+              COD required
+            </label>
+            {bookingForm.cod_required ? <input type="number" step="0.01" value={bookingForm.cod_amount} onChange={(event) => setBookingForm((value) => ({ ...value, cod_amount: event.target.value }))} placeholder="COD amount" className="rounded-md border px-3 py-2" /> : null}
+            <button className="rounded-md bg-ocean px-4 py-2 font-semibold text-white">Create Booking</button>
+          </div>
+        </form>
+
+        <form onSubmit={assignDriver} className="rounded-xl bg-white p-4 shadow">
+          <h2 className="text-xl font-semibold">Assign Driver</h2>
+          <div className="mt-3 grid gap-2">
+            <select required value={assignment.booking_id} onChange={(event) => setAssignment((value) => ({ ...value, booking_id: event.target.value }))} className="rounded-md border px-3 py-2">
+              <option value="">Select booking</option>
+              {bookings.filter((booking) => booking.status === "booked" || booking.status === "assigned").map((booking) => (
+                <option key={booking.id} value={booking.id}>{booking.tracking_id} - {booking.sender_name}</option>
+              ))}
+            </select>
+            <select required value={assignment.driver_id} onChange={(event) => setAssignment((value) => ({ ...value, driver_id: event.target.value }))} className="rounded-md border px-3 py-2">
+              <option value="">Select driver</option>
+              {drivers.map((driver) => (
+                <option key={driver.id} value={driver.id}>{driver.id.slice(0, 8)} - {driver.status}</option>
+              ))}
+            </select>
+            <button className="rounded-md bg-ocean px-4 py-2 font-semibold text-white">Assign / Reassign</button>
+          </div>
+        </form>
+      </section>
+
+      <section className="mt-6 rounded-xl bg-white p-4 shadow">
+        <h2 className="text-xl font-semibold">Bookings</h2>
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead>
+              <tr className="border-b">
+                <th className="py-2">Tracking</th>
+                <th className="py-2">Status</th>
+                <th className="py-2">Route</th>
+                <th className="py-2">Created</th>
+              </tr>
+            </thead>
+            <tbody>
+              {bookings.map((booking) => (
+                <tr key={booking.id} className="border-b">
+                  <td className="py-2">{booking.tracking_id}</td>
+                  <td className="py-2">{booking.status}</td>
+                  <td className="py-2">{booking.pickup_address} to {booking.drop_address}</td>
+                  <td className="py-2">{new Date(booking.created_at).toLocaleString()}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="mt-6 rounded-xl bg-white p-4 shadow">
+        <h2 className="text-xl font-semibold">Trips</h2>
+        <div className="mt-3 grid gap-3">
+          {trips.map((trip) => (
+            <div key={trip.id} className="rounded-lg border p-3">
+              <p className="font-semibold">Trip {trip.id.slice(0, 8)} - {trip.status}</p>
+              <p className="text-sm text-slate-600">Booking: {trip.booking_id.slice(0, 8)} | Driver: {trip.driver_id ? trip.driver_id.slice(0, 8) : "unassigned"}</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {drivers.map((driver) => (
+                  <button key={driver.id} onClick={() => reassignTrip(trip.id, driver.id)} className="rounded-md border px-3 py-1 text-sm">Reassign to {driver.id.slice(0, 4)}</button>
+                ))}
+              </div>
+            </div>
           ))}
-        </tbody>
-      </table>
+          {trips.length === 0 ? <p className="text-sm text-slate-600">No trips yet.</p> : null}
+        </div>
+      </section>
     </main>
   );
 }

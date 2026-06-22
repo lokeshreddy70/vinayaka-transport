@@ -1,83 +1,440 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+
+type Role = "customer" | "driver" | "operations_staff" | "admin";
+
+type AuthUser = {
+  id: string;
+  full_name: string;
+  email: string;
+  role: Role;
+};
 
 type Branch = {
   id: string;
   name: string;
   city: string;
-  radiusKm: number;
+  latitude: number;
+  longitude: number;
+  radius_km: number;
 };
 
-type Rule = {
+type PricingRule = {
   id: string;
-  branchId: string;
-  vehicleType: "BIKE" | "AUTO" | "CAR";
-  baseFare: string;
-  perKmRate: string;
+  branch_id: string;
+  vehicle_type: "bike" | "auto" | "car";
+  base_fare: number;
+  per_km_rate: number;
+  min_fare: number;
+  commission_percent: number;
+  cod_enabled: boolean;
 };
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/v1";
+type AppUser = {
+  id: string;
+  full_name: string;
+  email: string;
+  role: Role;
+  phone: string | null;
+};
 
-export default function HomePage() {
+type Complaint = {
+  id: string;
+  title: string;
+  description: string;
+  status: string;
+  created_at: string;
+};
+
+type DashboardCounts = Record<string, number>;
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "https://vinayaka-transport-api.vercel.app/api/v1";
+const TOKEN_KEY = "vinayaka_admin_token";
+
+async function api<T>(path: string, options: RequestInit = {}, token?: string): Promise<T> {
+  const response = await fetch(`${API_URL}${path}`, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(options.headers ?? {}),
+    },
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error ?? "Request failed");
+  }
+
+  return data as T;
+}
+
+export default function AdminPortalPage() {
+  const [token, setToken] = useState<string>("");
+  const [me, setMe] = useState<AuthUser | null>(null);
+  const [error, setError] = useState<string>("");
+  const [loading, setLoading] = useState(false);
+
+  const [counts, setCounts] = useState<DashboardCounts>({});
   const [branches, setBranches] = useState<Branch[]>([]);
-  const [rules, setRules] = useState<Rule[]>([]);
+  const [pricingRules, setPricingRules] = useState<PricingRule[]>([]);
+  const [users, setUsers] = useState<AppUser[]>([]);
+  const [complaints, setComplaints] = useState<Complaint[]>([]);
+
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+
+  const [newUser, setNewUser] = useState({ full_name: "", email: "", role: "operations_staff" as Role, phone: "" });
+  const [newBranch, setNewBranch] = useState({ name: "", city: "", latitude: "", longitude: "", radius_km: "" });
+  const [newRule, setNewRule] = useState({ branch_id: "", vehicle_type: "bike" as "bike" | "auto" | "car", base_fare: "", per_km_rate: "", min_fare: "", commission_percent: "", cod_enabled: true });
 
   useEffect(() => {
-    Promise.all([
-      fetch(`${API_URL}/branches`).then((res) => res.json()),
-      fetch(`${API_URL}/pricing-rules`).then((res) => res.json())
-    ]).then(([branchData, ruleData]) => {
-      setBranches(branchData);
-      setRules(ruleData);
-    });
+    const stored = localStorage.getItem(TOKEN_KEY) ?? "";
+    if (stored) {
+      setToken(stored);
+    }
   }, []);
 
-  const totalRules = useMemo(() => rules.length, [rules]);
+  useEffect(() => {
+    if (!token) {
+      return;
+    }
+
+    void initialize(token);
+  }, [token]);
+
+  async function initialize(authToken: string) {
+    try {
+      setLoading(true);
+      setError("");
+      const profile = await api<{ user: AuthUser }>("/auth/me", {}, authToken);
+      if (profile.user.role !== "admin") {
+        throw new Error("Admin role required");
+      }
+
+      setMe(profile.user);
+      await reloadAll(authToken);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Unable to load admin portal";
+      setError(message);
+      localStorage.removeItem(TOKEN_KEY);
+      setToken("");
+      setMe(null);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function reloadAll(authToken = token) {
+    const [dashboard, branchData, ruleData, userData, complaintData] = await Promise.all([
+      api<DashboardCounts>("/analytics/dashboard", {}, authToken),
+      api<Branch[]>("/branches", {}, authToken),
+      api<PricingRule[]>("/pricing_rules", {}, authToken),
+      api<AppUser[]>("/users", {}, authToken),
+      api<Complaint[]>("/complaints", {}, authToken),
+    ]);
+
+    setCounts(dashboard);
+    setBranches(branchData);
+    setPricingRules(ruleData);
+    setUsers(userData);
+    setComplaints(complaintData);
+  }
+
+  async function handleLogin(event: FormEvent) {
+    event.preventDefault();
+    try {
+      setLoading(true);
+      setError("");
+      const result = await api<{ access_token: string; user: AuthUser }>("/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ email: loginEmail, password: loginPassword }),
+      });
+
+      if (result.user.role !== "admin") {
+        throw new Error("Admin role required");
+      }
+
+      localStorage.setItem(TOKEN_KEY, result.access_token);
+      setToken(result.access_token);
+      setLoginPassword("");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Login failed";
+      setError(message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function logout() {
+    localStorage.removeItem(TOKEN_KEY);
+    setToken("");
+    setMe(null);
+  }
+
+  async function createUser(event: FormEvent) {
+    event.preventDefault();
+    try {
+      setError("");
+      const password = `Temp@${Date.now()}`;
+      await api("/auth/register", {
+        method: "POST",
+        body: JSON.stringify({
+          fullName: newUser.full_name,
+          email: newUser.email,
+          password,
+          phone: newUser.phone || undefined,
+          role: newUser.role,
+        }),
+      }, token);
+
+      setNewUser({ full_name: "", email: "", role: "operations_staff", phone: "" });
+      await reloadAll();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Unable to create user";
+      setError(message);
+    }
+  }
+
+  async function createBranch(event: FormEvent) {
+    event.preventDefault();
+    try {
+      setError("");
+      await api("/branches", {
+        method: "POST",
+        body: JSON.stringify({
+          name: newBranch.name,
+          city: newBranch.city,
+          latitude: Number(newBranch.latitude),
+          longitude: Number(newBranch.longitude),
+          radius_km: Number(newBranch.radius_km),
+        }),
+      }, token);
+
+      setNewBranch({ name: "", city: "", latitude: "", longitude: "", radius_km: "" });
+      await reloadAll();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Unable to create branch";
+      setError(message);
+    }
+  }
+
+  async function createPricingRule(event: FormEvent) {
+    event.preventDefault();
+    try {
+      setError("");
+      await api("/pricing_rules", {
+        method: "POST",
+        body: JSON.stringify({
+          branch_id: newRule.branch_id,
+          vehicle_type: newRule.vehicle_type,
+          base_fare: Number(newRule.base_fare),
+          per_km_rate: Number(newRule.per_km_rate),
+          min_fare: Number(newRule.min_fare),
+          commission_percent: Number(newRule.commission_percent),
+          cod_enabled: newRule.cod_enabled,
+        }),
+      }, token);
+
+      setNewRule({ branch_id: "", vehicle_type: "bike", base_fare: "", per_km_rate: "", min_fare: "", commission_percent: "", cod_enabled: true });
+      await reloadAll();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Unable to create pricing rule";
+      setError(message);
+    }
+  }
+
+  async function closeComplaint(id: string) {
+    try {
+      setError("");
+      await api(`/complaints/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: "closed" }),
+      }, token);
+      await reloadAll();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Unable to update complaint";
+      setError(message);
+    }
+  }
+
+  const totalRevenue = useMemo(() => counts.payments ?? 0, [counts]);
+
+  if (!token || !me) {
+    return (
+      <main className="mx-auto max-w-xl p-6">
+        <h1 className="text-3xl font-bold text-ocean">Vinayaka Transport Admin Portal</h1>
+        <p className="mt-2 text-slate-600">Sign in as admin to manage branches, pricing, users, and complaints.</p>
+
+        <form onSubmit={handleLogin} className="mt-6 grid gap-3 rounded-xl bg-white p-4 shadow">
+          <input required value={loginEmail} onChange={(event) => setLoginEmail(event.target.value)} type="email" placeholder="Admin email" className="rounded-md border px-3 py-2" />
+          <input required value={loginPassword} onChange={(event) => setLoginPassword(event.target.value)} type="password" placeholder="Password" className="rounded-md border px-3 py-2" />
+          <button disabled={loading} className="rounded-md bg-ocean px-4 py-2 font-semibold text-white">{loading ? "Signing in..." : "Login"}</button>
+        </form>
+        {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}
+      </main>
+    );
+  }
 
   return (
-    <main className="mx-auto max-w-6xl p-6">
-      <h1 className="text-3xl font-bold text-ocean">Vinayaka Transport Admin Portal</h1>
-      <p className="mt-2 text-slate-600">Branches, pricing, users, complaints and fraud monitoring.</p>
+    <main className="mx-auto max-w-7xl p-6">
+      <header className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-3xl font-bold text-ocean">Vinayaka Transport Admin Portal</h1>
+          <p className="mt-1 text-slate-600">Dashboard, users, drivers, branches, pricing rules, complaints, and analytics.</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="text-sm text-slate-600">{me.full_name}</span>
+          <button onClick={logout} className="rounded-md border px-3 py-2">Logout</button>
+        </div>
+      </header>
 
-      <section className="mt-6 grid gap-4 md:grid-cols-3">
-        <Card title="Branches" value={String(branches.length)} />
-        <Card title="Pricing Rules" value={String(totalRules)} />
-        <Card title="Active Cities" value={String(new Set(branches.map((branch) => branch.city)).size)} />
+      {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}
+
+      <section className="mt-6 grid gap-4 md:grid-cols-4">
+        <StatCard title="Users" value={counts.users ?? 0} />
+        <StatCard title="Drivers" value={counts.drivers ?? 0} />
+        <StatCard title="Bookings" value={counts.bookings ?? 0} />
+        <StatCard title="Payments" value={totalRevenue} />
       </section>
 
-      <section className="mt-8 rounded-xl bg-white p-4 shadow">
-        <h2 className="text-xl font-semibold">Branch Management</h2>
+      <section className="mt-8 grid gap-6 lg:grid-cols-2">
+        <form onSubmit={createUser} className="rounded-xl bg-white p-4 shadow">
+          <h2 className="text-xl font-semibold">Create User</h2>
+          <div className="mt-3 grid gap-2">
+            <input required value={newUser.full_name} onChange={(event) => setNewUser((value) => ({ ...value, full_name: event.target.value }))} placeholder="Full name" className="rounded-md border px-3 py-2" />
+            <input required type="email" value={newUser.email} onChange={(event) => setNewUser((value) => ({ ...value, email: event.target.value }))} placeholder="Email" className="rounded-md border px-3 py-2" />
+            <input value={newUser.phone} onChange={(event) => setNewUser((value) => ({ ...value, phone: event.target.value }))} placeholder="Phone" className="rounded-md border px-3 py-2" />
+            <select value={newUser.role} onChange={(event) => setNewUser((value) => ({ ...value, role: event.target.value as Role }))} className="rounded-md border px-3 py-2">
+              <option value="admin">Admin</option>
+              <option value="operations_staff">Operations Staff</option>
+              <option value="driver">Driver</option>
+              <option value="customer">Customer</option>
+            </select>
+            <button className="rounded-md bg-ocean px-4 py-2 font-semibold text-white">Create User</button>
+          </div>
+        </form>
+
+        <form onSubmit={createBranch} className="rounded-xl bg-white p-4 shadow">
+          <h2 className="text-xl font-semibold">Create Branch</h2>
+          <div className="mt-3 grid gap-2">
+            <input required value={newBranch.name} onChange={(event) => setNewBranch((value) => ({ ...value, name: event.target.value }))} placeholder="Branch name" className="rounded-md border px-3 py-2" />
+            <input required value={newBranch.city} onChange={(event) => setNewBranch((value) => ({ ...value, city: event.target.value }))} placeholder="City" className="rounded-md border px-3 py-2" />
+            <div className="grid grid-cols-2 gap-2">
+              <input required type="number" step="0.0001" value={newBranch.latitude} onChange={(event) => setNewBranch((value) => ({ ...value, latitude: event.target.value }))} placeholder="Latitude" className="rounded-md border px-3 py-2" />
+              <input required type="number" step="0.0001" value={newBranch.longitude} onChange={(event) => setNewBranch((value) => ({ ...value, longitude: event.target.value }))} placeholder="Longitude" className="rounded-md border px-3 py-2" />
+            </div>
+            <input required type="number" step="0.1" value={newBranch.radius_km} onChange={(event) => setNewBranch((value) => ({ ...value, radius_km: event.target.value }))} placeholder="Radius (km)" className="rounded-md border px-3 py-2" />
+            <button className="rounded-md bg-ocean px-4 py-2 font-semibold text-white">Create Branch</button>
+          </div>
+        </form>
+      </section>
+
+      <section className="mt-6 rounded-xl bg-white p-4 shadow">
+        <h2 className="text-xl font-semibold">Pricing Rules</h2>
+        <form onSubmit={createPricingRule} className="mt-3 grid gap-2 md:grid-cols-4">
+          <select required value={newRule.branch_id} onChange={(event) => setNewRule((value) => ({ ...value, branch_id: event.target.value }))} className="rounded-md border px-3 py-2">
+            <option value="">Select branch</option>
+            {branches.map((branch) => (
+              <option key={branch.id} value={branch.id}>{branch.name}</option>
+            ))}
+          </select>
+          <select value={newRule.vehicle_type} onChange={(event) => setNewRule((value) => ({ ...value, vehicle_type: event.target.value as "bike" | "auto" | "car" }))} className="rounded-md border px-3 py-2">
+            <option value="bike">Bike</option>
+            <option value="auto">Auto</option>
+            <option value="car">Car</option>
+          </select>
+          <input required type="number" step="0.01" value={newRule.base_fare} onChange={(event) => setNewRule((value) => ({ ...value, base_fare: event.target.value }))} placeholder="Base fare" className="rounded-md border px-3 py-2" />
+          <input required type="number" step="0.01" value={newRule.per_km_rate} onChange={(event) => setNewRule((value) => ({ ...value, per_km_rate: event.target.value }))} placeholder="Per km" className="rounded-md border px-3 py-2" />
+          <input required type="number" step="0.01" value={newRule.min_fare} onChange={(event) => setNewRule((value) => ({ ...value, min_fare: event.target.value }))} placeholder="Min fare" className="rounded-md border px-3 py-2" />
+          <input required type="number" step="0.01" value={newRule.commission_percent} onChange={(event) => setNewRule((value) => ({ ...value, commission_percent: event.target.value }))} placeholder="Commission %" className="rounded-md border px-3 py-2" />
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={newRule.cod_enabled} onChange={(event) => setNewRule((value) => ({ ...value, cod_enabled: event.target.checked }))} />
+            COD Enabled
+          </label>
+          <button className="rounded-md bg-ocean px-4 py-2 font-semibold text-white">Add Rule</button>
+        </form>
+
         <div className="mt-4 overflow-x-auto">
           <table className="w-full text-left text-sm">
             <thead>
               <tr className="border-b">
-                <th className="py-2">Name</th>
-                <th className="py-2">City</th>
-                <th className="py-2">Radius (km)</th>
+                <th className="py-2">Branch</th>
+                <th className="py-2">Vehicle</th>
+                <th className="py-2">Base</th>
+                <th className="py-2">Per km</th>
+                <th className="py-2">Min</th>
+                <th className="py-2">Commission</th>
               </tr>
             </thead>
             <tbody>
-              {branches.map((branch) => (
-                <tr key={branch.id} className="border-b">
-                  <td className="py-2">{branch.name}</td>
-                  <td className="py-2">{branch.city}</td>
-                  <td className="py-2">{branch.radiusKm}</td>
+              {pricingRules.map((rule) => (
+                <tr key={rule.id} className="border-b">
+                  <td className="py-2">{branches.find((branch) => branch.id === rule.branch_id)?.name ?? rule.branch_id}</td>
+                  <td className="py-2 uppercase">{rule.vehicle_type}</td>
+                  <td className="py-2">{rule.base_fare}</td>
+                  <td className="py-2">{rule.per_km_rate}</td>
+                  <td className="py-2">{rule.min_fare}</td>
+                  <td className="py-2">{rule.commission_percent}%</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       </section>
+
+      <section className="mt-6 grid gap-6 lg:grid-cols-2">
+        <div className="rounded-xl bg-white p-4 shadow">
+          <h2 className="text-xl font-semibold">Users</h2>
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead>
+                <tr className="border-b">
+                  <th className="py-2">Name</th>
+                  <th className="py-2">Email</th>
+                  <th className="py-2">Role</th>
+                </tr>
+              </thead>
+              <tbody>
+                {users.map((user) => (
+                  <tr key={user.id} className="border-b">
+                    <td className="py-2">{user.full_name}</td>
+                    <td className="py-2">{user.email}</td>
+                    <td className="py-2 capitalize">{user.role.replace("_", " ")}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="rounded-xl bg-white p-4 shadow">
+          <h2 className="text-xl font-semibold">Complaints</h2>
+          <div className="mt-3 grid gap-3">
+            {complaints.map((complaint) => (
+              <div key={complaint.id} className="rounded-lg border p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="font-semibold">{complaint.title}</h3>
+                  <span className="text-xs uppercase">{complaint.status}</span>
+                </div>
+                <p className="mt-1 text-sm text-slate-600">{complaint.description}</p>
+                <button onClick={() => closeComplaint(complaint.id)} className="mt-2 rounded-md border px-3 py-1 text-sm">Close</button>
+              </div>
+            ))}
+            {complaints.length === 0 ? <p className="text-sm text-slate-600">No complaints found.</p> : null}
+          </div>
+        </div>
+      </section>
     </main>
   );
 }
 
-function Card({ title, value }: { title: string; value: string }) {
+function StatCard({ title, value }: { title: string; value: number }) {
   return (
-    <div className="rounded-xl bg-white p-4 shadow">
+    <article className="rounded-xl bg-white p-4 shadow">
       <p className="text-xs uppercase tracking-wide text-slate-500">{title}</p>
-      <p className="mt-2 text-2xl font-bold">{value}</p>
-    </div>
+      <p className="mt-2 text-3xl font-bold text-ocean">{value}</p>
+    </article>
   );
 }

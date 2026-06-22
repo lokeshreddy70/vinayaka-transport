@@ -2,6 +2,7 @@
   "name": "vinayaka-transport",
   "version": "1.0.0",
   "private": true,
+  "packageManager": "npm@10.9.0",
   "description": "Vinayaka Transport logistics operating system monorepo",
   "workspaces": [
     "apps/*",
@@ -10,10 +11,10 @@
   ],
   "scripts": {
     "dev": "turbo dev",
-    "build": "turbo build",
-    "lint": "turbo lint",
-    "test": "turbo test",
-    "format": "turbo format",
+    "build": "npm run build --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "format": "npm run format --workspaces --if-present",
     "dev:api": "npm run dev --workspace @vinayaka/api",
     "dev:realtime": "npm run dev --workspace @vinayaka/realtime",
     "dev:notifications": "npm run dev --workspace @vinayaka/notifications",

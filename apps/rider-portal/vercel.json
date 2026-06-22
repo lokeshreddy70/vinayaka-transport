@@ -1,3 +1,6 @@
 {
-  "framework": "nextjs"
+  "framework": "nextjs",
+  "env": {
+    "NEXT_IGNORE_INCORRECT_LOCKFILE": "1"
+  }
 }
