@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useDeferredValue, useEffect, useMemo, useState } from "react";
 
 type Role = "customer" | "driver" | "operations_staff" | "admin";
 
@@ -86,6 +86,8 @@ export default function OperationsPortalPage() {
 
   const [riderSearch, setRiderSearch] = useState("");
   const [customerSearch, setCustomerSearch] = useState("");
+  const deferredRiderSearch = useDeferredValue(riderSearch);
+  const deferredCustomerSearch = useDeferredValue(customerSearch);
 
   const [bookingForm, setBookingForm] = useState({
     branch_id: "",
@@ -216,7 +218,7 @@ export default function OperationsPortalPage() {
 
   const today = new Date().toISOString().slice(0, 10);
   const riderUsers = useMemo(() => {
-    const term = riderSearch.trim().toLowerCase();
+    const term = deferredRiderSearch.trim().toLowerCase();
     return users.filter((user) => {
       if (user.role !== "driver") {
         return false;
@@ -226,10 +228,10 @@ export default function OperationsPortalPage() {
       }
       return [user.full_name, user.email, user.phone ?? ""].some((value) => value.toLowerCase().includes(term));
     });
-  }, [users, riderSearch]);
+  }, [users, deferredRiderSearch]);
 
   const customerUsers = useMemo(() => {
-    const term = customerSearch.trim().toLowerCase();
+    const term = deferredCustomerSearch.trim().toLowerCase();
     return users.filter((user) => {
       if (user.role !== "customer") {
         return false;
@@ -239,7 +241,7 @@ export default function OperationsPortalPage() {
       }
       return [user.full_name, user.email, user.phone ?? ""].some((value) => value.toLowerCase().includes(term));
     });
-  }, [users, customerSearch]);
+  }, [users, deferredCustomerSearch]);
 
   const riderAttendance = useMemo(() => {
     const driverMap = new Map<string, string>();
@@ -421,39 +423,64 @@ export default function OperationsPortalPage() {
 
   if (!token || !me) {
     return (
-      <main className="mx-auto max-w-lg p-6">
-        <h1 className="text-3xl font-bold text-ocean">Vinayaka Operations Counter Portal</h1>
-        <p className="mt-2 text-slate-600">Quick booking, dispatch, parcel storage, and cash close workflows.</p>
-        <form onSubmit={login} className="mt-6 grid gap-3 rounded-xl bg-white p-4 shadow">
-          <input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Operations email" className="rounded-md border px-3 py-2" />
-          <input required type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Password" className="rounded-md border px-3 py-2" />
-          <button className="rounded-md bg-ocean px-4 py-2 font-semibold text-white">Login</button>
-        </form>
-        <form onSubmit={forgotPassword} className="mt-3 grid gap-2 rounded-xl bg-white p-4 shadow">
-          <p className="text-sm font-semibold">Forgot password</p>
-          <input required type="email" value={forgotEmail} onChange={(event) => setForgotEmail(event.target.value)} placeholder="Email for reset link" className="rounded-md border px-3 py-2" />
-          <button className="rounded-md border px-4 py-2 font-semibold">Send Reset Link</button>
+      <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-8">
+        <section className="overflow-hidden rounded-[36px] border border-white/80 bg-white/80 shadow-[0_30px_90px_-40px_rgba(13,43,82,0.45)] backdrop-blur">
+          <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+            <div className="bg-[linear-gradient(135deg,#0d2b52,#153b71)] px-6 py-8 text-white sm:px-8 lg:px-10">
+              <p className="inline-flex rounded-full bg-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.32em] text-slate-200">Operations counter</p>
+              <h1 className="mt-5 max-w-md text-4xl font-bold leading-tight">Create bookings, assign riders, and control trip flow with smoother dispatch tools.</h1>
+              <p className="mt-4 max-w-xl text-sm leading-7 text-slate-200">Designed to feel closer to a production-grade counter app: cleaner forms, quicker actions, and more readable live records.</p>
+            </div>
+
+            <div className="p-6 sm:p-8">
+              <div className="rounded-[28px] border border-slate-200/80 bg-white p-5 shadow-[0_24px_70px_-34px_rgba(13,43,82,0.28)]">
+                <h2 className="text-2xl font-bold text-slate-900">Operations login</h2>
+                <p className="mt-2 text-sm text-slate-600">Access booking, assignment, and rider activity controls.</p>
+                <form onSubmit={login} className="mt-6 grid gap-3">
+                  <input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Operations email" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3" />
+                  <input required type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Password" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3" />
+                  <button className="rounded-2xl bg-[linear-gradient(135deg,#49b857,#2b9545)] px-4 py-3 font-semibold text-white shadow-[0_16px_30px_-18px_rgba(73,184,87,0.8)]">Login</button>
+                </form>
+                <form onSubmit={forgotPassword} className="mt-4 grid gap-2 rounded-[24px] border border-slate-200 bg-slate-50/70 p-4">
+                  <p className="text-sm font-semibold text-slate-900">Forgot password</p>
+                  <input required type="email" value={forgotEmail} onChange={(event) => setForgotEmail(event.target.value)} placeholder="Email for reset link" className="rounded-2xl border border-slate-200 bg-white px-4 py-3" />
+                  <button className="rounded-2xl border border-slate-300 bg-white px-4 py-3 font-semibold text-slate-900">Send Reset Link</button>
           {forgotMessage ? <p className="text-sm text-green-700">{forgotMessage}</p> : null}
-        </form>
-        {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}
+                </form>
+                {error ? <p className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p> : null}
+              </div>
+            </div>
+          </div>
+        </section>
       </main>
     );
   }
 
   return (
-    <main className="mx-auto max-w-[1200px] px-6 py-6">
-      <header className="flex items-center justify-between gap-3">
-        <div>
-          <h1 className="text-3xl font-bold text-ocean">Vinayaka Operations Counter Portal</h1>
-          <p className="mt-1 text-slate-600">Manage bookings, assignments, trips, tracking, and payment workflows.</p>
+    <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+      <section className="overflow-hidden rounded-[36px] border border-white/80 bg-white/80 p-5 shadow-[0_30px_90px_-40px_rgba(13,43,82,0.45)] backdrop-blur sm:p-6">
+      <header className="grid gap-5 lg:grid-cols-[1.15fr_0.85fr]">
+        <div className="rounded-[32px] bg-[linear-gradient(135deg,#0d2b52,#153b71)] px-6 py-7 text-white">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-200">Counter operations</p>
+              <h1 className="mt-2 text-3xl font-bold">Dispatch and booking control</h1>
+              <p className="mt-2 max-w-xl text-sm leading-7 text-slate-200">Create manual bookings, assign riders quickly, and monitor live trips in a cleaner interface.</p>
+            </div>
+            <button onClick={logout} className="rounded-2xl border border-white/20 bg-white/10 px-4 py-3 text-sm font-semibold text-white">Logout</button>
+          </div>
         </div>
-        <button onClick={logout} className="rounded-md border px-3 py-2">Logout</button>
+        <div className="rounded-[32px] border border-slate-200/80 bg-white p-6 shadow-[0_24px_70px_-34px_rgba(13,43,82,0.22)]">
+          <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-500">Ready now</p>
+          <h2 className="mt-2 text-2xl font-bold text-slate-900">{bookings.length} bookings loaded</h2>
+          <p className="mt-2 text-sm text-slate-600">Approved rider profiles now show in assignment, and search lists use deferred filtering to keep the app smoother.</p>
+        </div>
       </header>
 
-      {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}
+      {error ? <p className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p> : null}
 
       <section className="mt-6 grid gap-6 lg:grid-cols-2">
-        <form onSubmit={createManualBooking} className="rounded-xl bg-white p-4 shadow">
+        <form onSubmit={createManualBooking} className="rounded-[28px] border border-slate-200/80 bg-white p-5 shadow-[0_24px_70px_-34px_rgba(13,43,82,0.22)]">
           <h2 className="text-xl font-semibold">Create Manual Booking</h2>
           <div className="mt-3 grid gap-2">
             <select aria-label="Booking branch" required value={bookingForm.branch_id} onChange={(event) => setBookingForm((value) => ({ ...value, branch_id: event.target.value }))} className="rounded-md border px-3 py-2">
@@ -488,7 +515,7 @@ export default function OperationsPortalPage() {
           </div>
         </form>
 
-        <form onSubmit={assignDriver} className="rounded-xl bg-white p-4 shadow">
+        <form onSubmit={assignDriver} className="rounded-[28px] border border-slate-200/80 bg-white p-5 shadow-[0_24px_70px_-34px_rgba(13,43,82,0.22)]">
           <h2 className="text-xl font-semibold">Assign Driver</h2>
           <div className="mt-3 grid gap-2">
             <select aria-label="Assignment booking" required value={assignment.booking_id} onChange={(event) => setAssignment((value) => ({ ...value, booking_id: event.target.value }))} className="rounded-md border px-3 py-2">
@@ -509,7 +536,7 @@ export default function OperationsPortalPage() {
         </form>
       </section>
 
-      <section className="mt-6 rounded-xl bg-white p-4 shadow">
+      <section className="mt-6 rounded-[28px] border border-slate-200/80 bg-white p-5 shadow-[0_24px_70px_-34px_rgba(13,43,82,0.22)]">
         <h2 className="text-xl font-semibold">Bookings</h2>
         <div className="mt-3 overflow-x-auto">
           <table className="w-full text-left text-sm">
@@ -535,16 +562,16 @@ export default function OperationsPortalPage() {
         </div>
       </section>
 
-      <section className="mt-6 rounded-xl bg-white p-4 shadow">
+      <section className="mt-6 rounded-[28px] border border-slate-200/80 bg-white p-5 shadow-[0_24px_70px_-34px_rgba(13,43,82,0.22)]">
         <h2 className="text-xl font-semibold">Trips</h2>
         <div className="mt-3 grid gap-3">
           {trips.map((trip) => (
-            <div key={trip.id} className="rounded-lg border p-3">
+              <div key={trip.id} className="rounded-[22px] border border-slate-200 bg-slate-50/70 p-4">
               <p className="font-semibold">Trip {trip.id.slice(0, 8)} - {trip.status}</p>
               <p className="text-sm text-slate-600">Booking: {trip.booking_id.slice(0, 8)} | Driver: {trip.driver_id ? trip.driver_id.slice(0, 8) : "unassigned"}</p>
               <div className="mt-2 flex flex-wrap gap-2">
                 {drivers.map((driver) => (
-                  <button key={driver.id} onClick={() => reassignTrip(trip.id, driver.id)} className="rounded-md border px-3 py-1 text-sm">Reassign to {driver.id.slice(0, 4)}</button>
+                  <button key={driver.id} onClick={() => reassignTrip(trip.id, driver.id)} className="rounded-2xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-900">Reassign to {driver.id.slice(0, 4)}</button>
                 ))}
               </div>
             </div>
@@ -554,9 +581,9 @@ export default function OperationsPortalPage() {
       </section>
 
       <section className="mt-6 grid gap-6 lg:grid-cols-2">
-        <div className="rounded-xl bg-white p-4 shadow">
+        <div className="rounded-[28px] border border-slate-200/80 bg-white p-5 shadow-[0_24px_70px_-34px_rgba(13,43,82,0.22)]">
           <h2 className="text-xl font-semibold">Rider History</h2>
-          <input value={riderSearch} onChange={(event) => setRiderSearch(event.target.value)} placeholder="Search rider by name, email, phone" className="mt-3 w-full rounded-md border px-3 py-2" />
+          <input value={riderSearch} onChange={(event) => setRiderSearch(event.target.value)} placeholder="Search rider by name, email, phone" className="mt-3 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3" />
           <div className="mt-3 overflow-x-auto">
             <table className="w-full text-left text-sm">
               <thead>
@@ -581,9 +608,9 @@ export default function OperationsPortalPage() {
           </div>
         </div>
 
-        <div className="rounded-xl bg-white p-4 shadow">
+        <div className="rounded-[28px] border border-slate-200/80 bg-white p-5 shadow-[0_24px_70px_-34px_rgba(13,43,82,0.22)]">
           <h2 className="text-xl font-semibold">Customer History</h2>
-          <input value={customerSearch} onChange={(event) => setCustomerSearch(event.target.value)} placeholder="Search customer by name, email, phone" className="mt-3 w-full rounded-md border px-3 py-2" />
+          <input value={customerSearch} onChange={(event) => setCustomerSearch(event.target.value)} placeholder="Search customer by name, email, phone" className="mt-3 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3" />
           <div className="mt-3 overflow-x-auto">
             <table className="w-full text-left text-sm">
               <thead>
@@ -607,6 +634,7 @@ export default function OperationsPortalPage() {
             </table>
           </div>
         </div>
+      </section>
       </section>
     </main>
   );

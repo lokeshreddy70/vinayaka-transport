@@ -36,6 +36,11 @@ const riderOtpVerifySchema = z.object({
   token: z.string().min(4).max(10),
 });
 
+const riderPasswordLoginSchema = z.object({
+  phone: z.string().min(10).max(20),
+  password: z.string().min(8),
+});
+
 const bookingSchema = z.object({
   branch_id: z.string().uuid(),
   sender_name: z.string().min(2),
@@ -279,6 +284,46 @@ async function handleRiderVerifyOtp(req: IncomingMessage, res: ServerResponse) {
   });
 }
 
+async function handleRiderPasswordLogin(req: IncomingMessage, res: ServerResponse) {
+  const parsed = riderPasswordLoginSchema.safeParse(await parseBody(req));
+  if (!parsed.success) {
+    json(res, 400, { error: "Invalid rider password login payload", details: parsed.error.flatten() });
+    return;
+  }
+
+  const phone = sanitizeText(parsed.data.phone);
+  const password = parsed.data.password;
+
+  const { data: profile, error: profileError } = await supabaseAdmin
+    .from("users")
+    .select("id, auth_user_id, full_name, email, phone, role")
+    .eq("phone", phone)
+    .eq("role", "driver")
+    .maybeSingle();
+
+  if (profileError || !profile) {
+    json(res, 401, { error: "Driver account not found for this mobile number" });
+    return;
+  }
+
+  const { data: signInData, error: signInError } = await supabaseAnon.auth.signInWithPassword({
+    email: profile.email,
+    password,
+  });
+
+  if (signInError || !signInData.session || !signInData.user) {
+    json(res, 401, { error: signInError?.message ?? "Invalid mobile number or password" });
+    return;
+  }
+
+  json(res, 200, {
+    access_token: signInData.session.access_token,
+    refresh_token: signInData.session.refresh_token,
+    expires_in: signInData.session.expires_in,
+    user: profile,
+  });
+}
+
 async function handleAuthMe(res: ServerResponse, context: AuthContext | undefined) {
   if (!context) {
     json(res, 401, { error: "Unauthorized" });
@@ -297,6 +342,43 @@ async function handleAuthLogout(res: ServerResponse, context: AuthContext | unde
   // Supabase server-side client is stateless in this API model.
   // Client clears tokens locally on manual logout.
   json(res, 200, { ok: true });
+}
+
+async function handleAdminResetUserPassword(res: ServerResponse, context: AuthContext, userId: string) {
+  requireRole(context, ["admin"]);
+
+  const { data: profile, error: profileError } = await supabaseAdmin
+    .from("users")
+    .select("id, auth_user_id, full_name, email, role")
+    .eq("id", userId)
+    .maybeSingle();
+
+  if (profileError || !profile) {
+    json(res, 404, { error: "User not found" });
+    return;
+  }
+
+  const temporaryPassword = `Temp@${Date.now()}`;
+  const { error: resetError } = await supabaseAdmin.auth.admin.updateUserById(profile.auth_user_id, {
+    password: temporaryPassword,
+  });
+
+  if (resetError) {
+    json(res, 400, { error: resetError.message });
+    return;
+  }
+
+  await auditLog(context, "reset_password", "users", userId);
+  json(res, 200, {
+    ok: true,
+    user: {
+      id: profile.id,
+      full_name: profile.full_name,
+      email: profile.email,
+      role: profile.role,
+    },
+    temporary_password: temporaryPassword,
+  });
 }
 
 async function listTable(res: ServerResponse, table: string, orderBy = "created_at") {
@@ -751,6 +833,10 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         await handleRiderVerifyOtp(req, res);
         return;
       }
+      if (method === "POST" && action === "rider-password-login") {
+        await handleRiderPasswordLogin(req, res);
+        return;
+      }
       if (method === "POST" && action === "logout") {
         const context = await requireAuth(req);
         await handleAuthLogout(res, context);
@@ -810,6 +896,11 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
 
     requireRole(context, ["admin", "operations_staff"]);
     const id = pathSegments[1];
+
+    if (resource === "users" && method === "POST" && id && pathSegments[2] === "reset-password") {
+      await handleAdminResetUserPassword(res, context, id);
+      return;
+    }
 
     if (method === "GET" && !id) {
       await listTable(res, resource);

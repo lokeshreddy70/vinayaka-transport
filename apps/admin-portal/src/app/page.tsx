@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useDeferredValue, useEffect, useMemo, useState } from "react";
 
 type Role = "customer" | "driver" | "operations_staff" | "admin";
 
@@ -102,6 +102,7 @@ export default function AdminPortalPage() {
   const [refreshToken, setRefreshToken] = useState<string>("");
   const [me, setMe] = useState<AuthUser | null>(null);
   const [error, setError] = useState<string>("");
+  const [notice, setNotice] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [forgotEmail, setForgotEmail] = useState("");
   const [forgotMessage, setForgotMessage] = useState("");
@@ -117,6 +118,8 @@ export default function AdminPortalPage() {
 
   const [riderSearch, setRiderSearch] = useState("");
   const [customerSearch, setCustomerSearch] = useState("");
+  const deferredRiderSearch = useDeferredValue(riderSearch);
+  const deferredCustomerSearch = useDeferredValue(customerSearch);
 
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
@@ -148,6 +151,7 @@ export default function AdminPortalPage() {
     try {
       setLoading(true);
       setError("");
+      setNotice("");
       const profile = await api<{ user: AuthUser }>("/auth/me", {}, authToken);
       if (profile.user.role !== "admin") {
         throw new Error("Admin role required");
@@ -299,6 +303,7 @@ export default function AdminPortalPage() {
     try {
       setForgotMessage("");
       setError("");
+      setNotice("");
       await api<{ ok: boolean; message: string }>("/auth/forgot-password", {
         method: "POST",
         body: JSON.stringify({ email: forgotEmail }),
@@ -314,6 +319,7 @@ export default function AdminPortalPage() {
     event.preventDefault();
     try {
       setError("");
+      setNotice("");
       const password = `Temp@${Date.now()}`;
       const created = await requestWithRetry<{ user: { id: string } }>("/auth/register", {
         method: "POST",
@@ -338,6 +344,7 @@ export default function AdminPortalPage() {
       }
 
       setNewUser({ full_name: "", email: "", role: "operations_staff", phone: "" });
+  setNotice(`Temporary password for ${newUser.full_name}: ${password}`);
       await reloadAll();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Unable to create user";
@@ -348,6 +355,7 @@ export default function AdminPortalPage() {
   async function syncAndApproveRiders() {
     try {
       setError("");
+      setNotice("");
       const riderUsers = users.filter((user) => user.role === "driver");
       const existingByUserId = new Map<string, DriverRecord>();
       for (const driver of drivers) {
@@ -390,6 +398,7 @@ export default function AdminPortalPage() {
     event.preventDefault();
     try {
       setError("");
+      setNotice("");
       await requestWithRetry("/branches", {
         method: "POST",
         body: JSON.stringify({
@@ -413,6 +422,7 @@ export default function AdminPortalPage() {
     event.preventDefault();
     try {
       setError("");
+      setNotice("");
       await requestWithRetry("/pricing_rules", {
         method: "POST",
         body: JSON.stringify({
@@ -437,6 +447,7 @@ export default function AdminPortalPage() {
   async function closeComplaint(id: string) {
     try {
       setError("");
+      setNotice("");
       await requestWithRetry(`/complaints/${id}`, {
         method: "PATCH",
         body: JSON.stringify({ status: "closed" }),
@@ -484,7 +495,7 @@ export default function AdminPortalPage() {
   }, [bookingHistory, today]);
 
   const riderUsers = useMemo(() => {
-    const term = riderSearch.trim().toLowerCase();
+    const term = deferredRiderSearch.trim().toLowerCase();
     return users.filter((user) => {
       if (user.role !== "driver") {
         return false;
@@ -494,10 +505,10 @@ export default function AdminPortalPage() {
       }
       return [user.full_name, user.email, user.phone ?? ""].some((value) => value.toLowerCase().includes(term));
     });
-  }, [users, riderSearch]);
+  }, [users, deferredRiderSearch]);
 
   const customerUsers = useMemo(() => {
-    const term = customerSearch.trim().toLowerCase();
+    const term = deferredCustomerSearch.trim().toLowerCase();
     return users.filter((user) => {
       if (user.role !== "customer") {
         return false;
@@ -507,7 +518,7 @@ export default function AdminPortalPage() {
       }
       return [user.full_name, user.email, user.phone ?? ""].some((value) => value.toLowerCase().includes(term));
     });
-  }, [users, customerSearch]);
+  }, [users, deferredCustomerSearch]);
 
   const riderTripCount = (userId: string) => {
     const driverIds = drivers.filter((driver) => driver.user_id === userId).map((driver) => driver.id);
@@ -521,42 +532,80 @@ export default function AdminPortalPage() {
     return bookingHistory.filter((booking) => booking.customer_user_id === userId || (!!phone && booking.sender_phone === phone)).length;
   };
 
+  async function resetUserPassword(userId: string, fullName: string) {
+    try {
+      setError("");
+      setNotice("");
+      const response = await requestWithRetry<{ temporary_password: string }>(`/users/${userId}/reset-password`, {
+        method: "POST",
+      });
+      setNotice(`Temporary password for ${fullName}: ${response.temporary_password}`);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Unable to reset password";
+      setError(message);
+    }
+  }
+
   if (!token || !me) {
     return (
-      <main className="mx-auto max-w-xl p-6">
-        <h1 className="text-3xl font-bold text-ocean">Vinayaka Transport Admin Portal</h1>
-        <p className="mt-2 text-slate-600">Sign in as admin to manage branches, pricing, users, and complaints.</p>
+      <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-8">
+        <section className="overflow-hidden rounded-[36px] border border-white/80 bg-white/80 shadow-[0_30px_90px_-40px_rgba(13,43,82,0.45)] backdrop-blur">
+          <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+            <div className="bg-[linear-gradient(135deg,#0d2b52,#153b71)] px-6 py-8 text-white sm:px-8 lg:px-10">
+              <p className="inline-flex rounded-full bg-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.32em] text-slate-200">Admin command center</p>
+              <h1 className="mt-5 max-w-md text-4xl font-bold leading-tight">Manage riders, branches, pricing, and live activity with a polished dashboard shell.</h1>
+              <p className="mt-4 max-w-xl text-sm leading-7 text-slate-200">Built for operations clarity: Indian branch setup, fast rider sync, and cleaner workflows for daily dispatch control.</p>
+            </div>
 
-        <form onSubmit={handleLogin} className="mt-6 grid gap-3 rounded-xl bg-white p-4 shadow">
-          <input required value={loginEmail} onChange={(event) => setLoginEmail(event.target.value)} type="email" placeholder="Admin email" className="rounded-md border px-3 py-2" />
-          <input required value={loginPassword} onChange={(event) => setLoginPassword(event.target.value)} type="password" placeholder="Password" className="rounded-md border px-3 py-2" />
-          <button disabled={loading} className="rounded-md bg-ocean px-4 py-2 font-semibold text-white">{loading ? "Signing in..." : "Login"}</button>
-        </form>
-        <form onSubmit={forgotPassword} className="mt-3 grid gap-2 rounded-xl bg-white p-4 shadow">
-          <p className="text-sm font-semibold">Forgot password</p>
-          <input required type="email" value={forgotEmail} onChange={(event) => setForgotEmail(event.target.value)} placeholder="Email for reset link" className="rounded-md border px-3 py-2" />
-          <button className="rounded-md border px-4 py-2 font-semibold">Send Reset Link</button>
-          {forgotMessage ? <p className="text-sm text-green-700">{forgotMessage}</p> : null}
-        </form>
-        {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}
+            <div className="p-6 sm:p-8">
+              <div className="rounded-[28px] border border-slate-200/80 bg-white p-5 shadow-[0_24px_70px_-34px_rgba(13,43,82,0.28)]">
+                <h2 className="text-2xl font-bold text-slate-900">Admin login</h2>
+                <p className="mt-2 text-sm text-slate-600">Secure access to users, branches, pricing, analytics, and complaints.</p>
+
+                <form onSubmit={handleLogin} className="mt-6 grid gap-3">
+                  <input required value={loginEmail} onChange={(event) => setLoginEmail(event.target.value)} type="email" placeholder="Admin email" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3" />
+                  <input required value={loginPassword} onChange={(event) => setLoginPassword(event.target.value)} type="password" placeholder="Password" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3" />
+                  <button disabled={loading} className="rounded-2xl bg-[linear-gradient(135deg,#49b857,#2b9545)] px-4 py-3 font-semibold text-white shadow-[0_16px_30px_-18px_rgba(73,184,87,0.8)]">{loading ? "Signing in..." : "Login"}</button>
+                </form>
+
+                <form onSubmit={forgotPassword} className="mt-4 grid gap-2 rounded-[24px] border border-slate-200 bg-slate-50/70 p-4">
+                  <p className="text-sm font-semibold text-slate-900">Forgot password</p>
+                  <input required type="email" value={forgotEmail} onChange={(event) => setForgotEmail(event.target.value)} placeholder="Email for reset link" className="rounded-2xl border border-slate-200 bg-white px-4 py-3" />
+                  <button className="rounded-2xl border border-slate-300 bg-white px-4 py-3 font-semibold text-slate-900">Send Reset Link</button>
+              {forgotMessage ? <p className="text-sm text-green-700">{forgotMessage}</p> : null}
+                </form>
+                {error ? <p className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p> : null}
+              </div>
+            </div>
+          </div>
+        </section>
       </main>
     );
   }
 
   return (
-    <main className="mx-auto max-w-7xl p-6">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-3xl font-bold text-ocean">Vinayaka Transport Admin Portal</h1>
-          <p className="mt-1 text-slate-600">Dashboard, users, drivers, branches, pricing rules, complaints, and analytics.</p>
+    <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+      <section className="overflow-hidden rounded-[36px] border border-white/80 bg-white/80 p-5 shadow-[0_30px_90px_-40px_rgba(13,43,82,0.45)] backdrop-blur sm:p-6">
+      <header className="grid gap-5 lg:grid-cols-[1.15fr_0.85fr]">
+        <div className="rounded-[32px] bg-[linear-gradient(135deg,#0d2b52,#153b71)] px-6 py-7 text-white">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-200">Admin overview</p>
+              <h1 className="mt-2 text-3xl font-bold">Vinayaka Transport Control</h1>
+              <p className="mt-2 max-w-xl text-sm leading-7 text-slate-200">Users, riders, branches, pricing rules, complaints, and analytics in one upgraded dashboard.</p>
+            </div>
+            <button onClick={logout} className="rounded-2xl border border-white/20 bg-white/10 px-4 py-3 text-sm font-semibold text-white">Logout</button>
+          </div>
         </div>
-        <div className="flex items-center gap-3">
-          <span className="text-sm text-slate-600">{me.full_name}</span>
-          <button onClick={logout} className="rounded-md border px-3 py-2">Logout</button>
+        <div className="rounded-[32px] border border-slate-200/80 bg-white p-6 shadow-[0_24px_70px_-34px_rgba(13,43,82,0.22)]">
+          <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-500">Logged in</p>
+          <h2 className="mt-2 text-2xl font-bold text-slate-900">{me.full_name}</h2>
+          <p className="mt-2 text-sm text-slate-600">Keep rider profiles approved, keep branches clean, and use this view as the main quality-control surface.</p>
         </div>
       </header>
 
-      {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}
+      {error ? <p className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p> : null}
+      {notice ? <p className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{notice}</p> : null}
 
       <section className="mt-6 grid gap-4 md:grid-cols-4">
         <StatCard title="Users" value={counts.users ?? 0} />
@@ -566,40 +615,40 @@ export default function AdminPortalPage() {
       </section>
 
       <section className="mt-8 grid gap-6 lg:grid-cols-2">
-        <form onSubmit={createUser} className="rounded-xl bg-white p-4 shadow">
+        <form onSubmit={createUser} className="rounded-[28px] border border-slate-200/80 bg-white p-5 shadow-[0_24px_70px_-34px_rgba(13,43,82,0.22)]">
           <h2 className="text-xl font-semibold">Create User</h2>
           <div className="mt-3 grid gap-2">
-            <input required value={newUser.full_name} onChange={(event) => setNewUser((value) => ({ ...value, full_name: event.target.value }))} placeholder="Full name" className="rounded-md border px-3 py-2" />
-            <input required type="email" value={newUser.email} onChange={(event) => setNewUser((value) => ({ ...value, email: event.target.value }))} placeholder="Email" className="rounded-md border px-3 py-2" />
-            <input value={newUser.phone} onChange={(event) => setNewUser((value) => ({ ...value, phone: event.target.value }))} placeholder="Phone (e.g. +91XXXXXXXXXX)" className="rounded-md border px-3 py-2" />
-            <select aria-label="User role" value={newUser.role} onChange={(event) => setNewUser((value) => ({ ...value, role: event.target.value as Role }))} className="rounded-md border px-3 py-2">
+            <input required value={newUser.full_name} onChange={(event) => setNewUser((value) => ({ ...value, full_name: event.target.value }))} placeholder="Full name" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3" />
+            <input required type="email" value={newUser.email} onChange={(event) => setNewUser((value) => ({ ...value, email: event.target.value }))} placeholder="Email" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3" />
+            <input value={newUser.phone} onChange={(event) => setNewUser((value) => ({ ...value, phone: event.target.value }))} placeholder="Phone (e.g. +91XXXXXXXXXX)" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3" />
+            <select aria-label="User role" value={newUser.role} onChange={(event) => setNewUser((value) => ({ ...value, role: event.target.value as Role }))} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
               <option value="admin">Admin</option>
               <option value="operations_staff">Operations Staff</option>
               <option value="driver">Driver</option>
               <option value="customer">Customer</option>
             </select>
-            <button className="rounded-md bg-ocean px-4 py-2 font-semibold text-white">Create User</button>
-            <button type="button" onClick={syncAndApproveRiders} className="rounded-md border px-4 py-2 font-semibold">Sync and Approve Rider Profiles</button>
+            <button className="rounded-2xl bg-[linear-gradient(135deg,#49b857,#2b9545)] px-4 py-3 font-semibold text-white shadow-[0_16px_30px_-18px_rgba(73,184,87,0.8)]">Create User</button>
+            <button type="button" onClick={syncAndApproveRiders} className="rounded-2xl border border-slate-300 bg-white px-4 py-3 font-semibold text-slate-900">Sync and Approve Rider Profiles</button>
           </div>
         </form>
 
-        <form onSubmit={createBranch} className="rounded-xl bg-white p-4 shadow">
+        <form onSubmit={createBranch} className="rounded-[28px] border border-slate-200/80 bg-white p-5 shadow-[0_24px_70px_-34px_rgba(13,43,82,0.22)]">
           <h2 className="text-xl font-semibold">Create Branch</h2>
           <div className="mt-3 grid gap-2">
-            <input required value={newBranch.name} onChange={(event) => setNewBranch((value) => ({ ...value, name: event.target.value }))} placeholder="Branch name (e.g. Tirupati Hub)" className="rounded-md border px-3 py-2" />
-            <input required value={newBranch.city} onChange={(event) => setNewBranch((value) => ({ ...value, city: event.target.value }))} placeholder="City (Nellore / Podalakur / Tirupati)" className="rounded-md border px-3 py-2" />
+            <input required value={newBranch.name} onChange={(event) => setNewBranch((value) => ({ ...value, name: event.target.value }))} placeholder="Branch name (e.g. Tirupati Hub)" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3" />
+            <input required value={newBranch.city} onChange={(event) => setNewBranch((value) => ({ ...value, city: event.target.value }))} placeholder="City (Nellore / Podalakur / Tirupati)" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3" />
             <div className="grid grid-cols-2 gap-2">
-              <input required type="number" step="0.0001" value={newBranch.latitude} onChange={(event) => setNewBranch((value) => ({ ...value, latitude: event.target.value }))} placeholder="Latitude (e.g. 14.4426)" className="rounded-md border px-3 py-2" />
-              <input required type="number" step="0.0001" value={newBranch.longitude} onChange={(event) => setNewBranch((value) => ({ ...value, longitude: event.target.value }))} placeholder="Longitude (e.g. 79.9865)" className="rounded-md border px-3 py-2" />
+              <input required type="number" step="0.0001" value={newBranch.latitude} onChange={(event) => setNewBranch((value) => ({ ...value, latitude: event.target.value }))} placeholder="Latitude (e.g. 14.4426)" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3" />
+              <input required type="number" step="0.0001" value={newBranch.longitude} onChange={(event) => setNewBranch((value) => ({ ...value, longitude: event.target.value }))} placeholder="Longitude (e.g. 79.9865)" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3" />
             </div>
-            <input required type="number" step="0.1" value={newBranch.radius_km} onChange={(event) => setNewBranch((value) => ({ ...value, radius_km: event.target.value }))} placeholder="Radius (km)" className="rounded-md border px-3 py-2" />
-            <button className="rounded-md bg-ocean px-4 py-2 font-semibold text-white">Create Branch</button>
-            <button type="button" onClick={ensureDefaultBranches} className="rounded-md border px-4 py-2 font-semibold">Add Tirupati + Nellore + Podalakur</button>
+            <input required type="number" step="0.1" value={newBranch.radius_km} onChange={(event) => setNewBranch((value) => ({ ...value, radius_km: event.target.value }))} placeholder="Radius (km)" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3" />
+            <button className="rounded-2xl bg-[linear-gradient(135deg,#49b857,#2b9545)] px-4 py-3 font-semibold text-white shadow-[0_16px_30px_-18px_rgba(73,184,87,0.8)]">Create Branch</button>
+            <button type="button" onClick={ensureDefaultBranches} className="rounded-2xl border border-slate-300 bg-white px-4 py-3 font-semibold text-slate-900">Add Tirupati + Nellore + Podalakur</button>
           </div>
         </form>
       </section>
 
-      <section className="mt-6 rounded-xl bg-white p-4 shadow">
+      <section className="mt-6 rounded-[28px] border border-slate-200/80 bg-white p-5 shadow-[0_24px_70px_-34px_rgba(13,43,82,0.22)]">
         <h2 className="text-xl font-semibold">Pricing Rules</h2>
         <form onSubmit={createPricingRule} className="mt-3 grid gap-2 md:grid-cols-4">
           <select aria-label="Pricing branch" required value={newRule.branch_id} onChange={(event) => setNewRule((value) => ({ ...value, branch_id: event.target.value }))} className="rounded-md border px-3 py-2">
@@ -653,7 +702,7 @@ export default function AdminPortalPage() {
       </section>
 
       <section className="mt-6 grid gap-6 lg:grid-cols-2">
-        <div className="rounded-xl bg-white p-4 shadow">
+        <div className="rounded-[28px] border border-slate-200/80 bg-white p-5 shadow-[0_24px_70px_-34px_rgba(13,43,82,0.22)]">
           <h2 className="text-xl font-semibold">Users</h2>
           <div className="mt-3 overflow-x-auto">
             <table className="w-full text-left text-sm">
@@ -677,7 +726,7 @@ export default function AdminPortalPage() {
           </div>
         </div>
 
-        <div className="rounded-xl bg-white p-4 shadow">
+        <div className="rounded-[28px] border border-slate-200/80 bg-white p-5 shadow-[0_24px_70px_-34px_rgba(13,43,82,0.22)]">
           <h2 className="text-xl font-semibold">Complaints</h2>
           <div className="mt-3 grid gap-3">
             {complaints.map((complaint) => (
@@ -687,7 +736,7 @@ export default function AdminPortalPage() {
                   <span className="text-xs uppercase">{complaint.status}</span>
                 </div>
                 <p className="mt-1 text-sm text-slate-600">{complaint.description}</p>
-                <button onClick={() => closeComplaint(complaint.id)} className="mt-2 rounded-md border px-3 py-1 text-sm">Close</button>
+                <button onClick={() => closeComplaint(complaint.id)} className="mt-2 rounded-2xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-900">Close</button>
               </div>
             ))}
             {complaints.length === 0 ? <p className="text-sm text-slate-600">No complaints found.</p> : null}
@@ -696,9 +745,9 @@ export default function AdminPortalPage() {
       </section>
 
       <section className="mt-6 grid gap-6 lg:grid-cols-2">
-        <div className="rounded-xl bg-white p-4 shadow">
+        <div className="rounded-[28px] border border-slate-200/80 bg-white p-5 shadow-[0_24px_70px_-34px_rgba(13,43,82,0.22)]">
           <h2 className="text-xl font-semibold">Rider History</h2>
-          <input value={riderSearch} onChange={(event) => setRiderSearch(event.target.value)} placeholder="Search rider by name, email, phone" className="mt-3 w-full rounded-md border px-3 py-2" />
+          <input value={riderSearch} onChange={(event) => setRiderSearch(event.target.value)} placeholder="Search rider by name, email, phone" className="mt-3 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3" />
           <div className="mt-3 overflow-x-auto">
             <table className="w-full text-left text-sm">
               <thead>
@@ -707,6 +756,7 @@ export default function AdminPortalPage() {
                   <th className="py-2">Phone</th>
                   <th className="py-2">Trips</th>
                   <th className="py-2">Attendance</th>
+                  <th className="py-2 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -716,6 +766,7 @@ export default function AdminPortalPage() {
                     <td className="py-2">{user.phone ?? "-"}</td>
                     <td className="py-2">{riderTripCount(user.id)}</td>
                     <td className="py-2">{riderAttendance.has(user.id) ? "Present" : "Absent"}</td>
+                    <td className="py-2 text-right"><button onClick={() => resetUserPassword(user.id, user.full_name)} className="rounded-2xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-900">Reset Password</button></td>
                   </tr>
                 ))}
               </tbody>
@@ -723,9 +774,9 @@ export default function AdminPortalPage() {
           </div>
         </div>
 
-        <div className="rounded-xl bg-white p-4 shadow">
+        <div className="rounded-[28px] border border-slate-200/80 bg-white p-5 shadow-[0_24px_70px_-34px_rgba(13,43,82,0.22)]">
           <h2 className="text-xl font-semibold">Customer History</h2>
-          <input value={customerSearch} onChange={(event) => setCustomerSearch(event.target.value)} placeholder="Search customer by name, email, phone" className="mt-3 w-full rounded-md border px-3 py-2" />
+          <input value={customerSearch} onChange={(event) => setCustomerSearch(event.target.value)} placeholder="Search customer by name, email, phone" className="mt-3 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3" />
           <div className="mt-3 overflow-x-auto">
             <table className="w-full text-left text-sm">
               <thead>
@@ -750,15 +801,16 @@ export default function AdminPortalPage() {
           </div>
         </div>
       </section>
+      </section>
     </main>
   );
 }
 
 function StatCard({ title, value }: { title: string; value: number }) {
   return (
-    <article className="rounded-xl bg-white p-4 shadow">
-      <p className="text-xs uppercase tracking-wide text-slate-500">{title}</p>
-      <p className="mt-2 text-3xl font-bold text-ocean">{value}</p>
+    <article className="rounded-[28px] border border-slate-200/80 bg-white p-5 shadow-[0_24px_70px_-34px_rgba(13,43,82,0.22)]">
+      <p className="text-xs uppercase tracking-[0.28em] text-slate-500">{title}</p>
+      <p className="mt-3 text-3xl font-bold text-slate-900">{value}</p>
     </article>
   );
 }

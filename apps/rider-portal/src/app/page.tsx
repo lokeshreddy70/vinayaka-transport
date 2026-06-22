@@ -53,8 +53,10 @@ export default function RiderPortalPage() {
 
   const [phone, setPhone] = useState("");
   const [otp, setOtp] = useState("");
+  const [password, setPassword] = useState("");
   const [otpSent, setOtpSent] = useState(false);
   const [authLoading, setAuthLoading] = useState(false);
+  const [passwordLoginVisible, setPasswordLoginVisible] = useState(false);
 
   const [trips, setTrips] = useState<Trip[]>([]);
   const [proofForm, setProofForm] = useState({ booking_id: "", trip_id: "", photo_url: "", signature_url: "", note: "" });
@@ -173,10 +175,12 @@ export default function RiderPortalPage() {
         throw new Error(data.error ?? "Unable to send OTP");
       }
       setOtpSent(true);
+      setPasswordLoginVisible(false);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Unable to send OTP";
       if (message.toLowerCase().includes("unsupported phone provider")) {
-        setError("SMS provider is not enabled in backend auth settings. Ask admin to enable phone OTP provider and SMS credentials.");
+        setPasswordLoginVisible(true);
+        setError("SMS OTP is not enabled on the backend yet. Use rider password login below for now, or enable the phone OTP provider in Supabase.");
       } else {
         setError(message);
       }
@@ -207,6 +211,34 @@ export default function RiderPortalPage() {
       setOtp("");
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "OTP verification failed";
+      setError(message);
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  async function loginWithPassword(event: FormEvent) {
+    event.preventDefault();
+    try {
+      setAuthLoading(true);
+      setError("");
+      const response = await fetch(`${API_URL}/auth/rider-password-login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone, password }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error ?? "Unable to login with password");
+      }
+
+      localStorage.setItem(TOKEN_KEY, data.access_token);
+      localStorage.setItem(REFRESH_TOKEN_KEY, data.refresh_token);
+      setToken(data.access_token);
+      setRefreshToken(data.refresh_token);
+      setPassword("");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Unable to login with password";
       setError(message);
     } finally {
       setAuthLoading(false);
@@ -248,73 +280,202 @@ export default function RiderPortalPage() {
     setOtpSent(false);
   }
 
+  const activeTrips = trips.filter((trip) => ["assigned", "accepted", "started", "pickup_complete", "in_transit"].includes(trip.status)).length;
+  const completedTrips = trips.filter((trip) => trip.status === "delivered").length;
+  const pendingTrips = trips.filter((trip) => trip.status === "assigned").length;
+
   if (!token || !me) {
     return (
-      <main className="mx-auto max-w-lg p-6">
-        <h1 className="text-3xl font-bold text-ocean">Vinayaka Rider Portal</h1>
-        <p className="mt-2 text-slate-600">Login with mobile OTP, then accept trips, update transit status, and upload proof.</p>
-        <form onSubmit={requestOtp} className="mt-6 grid gap-3 rounded-xl bg-white p-4 shadow">
-          <input required type="tel" value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="Mobile number (e.g. +919876543210)" className="rounded-md border px-3 py-2" />
-          <button disabled={authLoading} className="rounded-md bg-ocean px-4 py-2 font-semibold text-white">{authLoading ? "Sending OTP..." : "Send OTP"}</button>
-        </form>
+      <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-8">
+        <section className="overflow-hidden rounded-[36px] border border-white/80 bg-white/80 shadow-[0_30px_90px_-40px_rgba(13,43,82,0.45)] backdrop-blur">
+          <div className="grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
+            <div className="bg-[linear-gradient(135deg,#0d2b52,#153b71)] px-6 py-8 text-white sm:px-8 lg:px-10">
+              <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.35em] text-white/90">
+                Vinayaka Rider App
+              </div>
+              <h1 className="mt-5 max-w-md text-4xl font-bold leading-tight">Fast rider dispatch, trip control, and proof upload in one app-like screen.</h1>
+              <p className="mt-4 max-w-xl text-sm leading-7 text-slate-200">Designed for Play Store style review expectations: direct login path, crisp action states, and clean mobile-friendly spacing for daily field use.</p>
 
-        {otpSent ? (
-          <form onSubmit={verifyOtp} className="mt-3 grid gap-3 rounded-xl bg-white p-4 shadow">
-            <input required value={otp} onChange={(event) => setOtp(event.target.value)} placeholder="Enter OTP" className="rounded-md border px-3 py-2" />
-            <button disabled={authLoading} className="rounded-md border px-4 py-2 font-semibold">{authLoading ? "Verifying..." : "Verify OTP & Login"}</button>
-          </form>
-        ) : null}
-        {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}
+              <div className="mt-8 grid gap-4 sm:grid-cols-3">
+                <div className="rounded-[24px] border border-white/10 bg-white/10 p-4">
+                  <p className="text-xs uppercase tracking-[0.28em] text-slate-200">Trips</p>
+                  <p className="mt-2 text-3xl font-bold">Live</p>
+                </div>
+                <div className="rounded-[24px] border border-white/10 bg-white/10 p-4">
+                  <p className="text-xs uppercase tracking-[0.28em] text-slate-200">Login</p>
+                  <p className="mt-2 text-3xl font-bold">OTP + Password</p>
+                </div>
+                <div className="rounded-[24px] border border-white/10 bg-white/10 p-4">
+                  <p className="text-xs uppercase tracking-[0.28em] text-slate-200">Delivery</p>
+                  <p className="mt-2 text-3xl font-bold">Proof Ready</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-6 sm:p-8">
+              <div className="rounded-[28px] border border-slate-200/80 bg-white p-5 shadow-[0_24px_70px_-34px_rgba(13,43,82,0.28)]">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-500">Secure access</p>
+                    <h2 className="mt-2 text-2xl font-bold text-slate-900">Rider login</h2>
+                  </div>
+                  <div className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">Field ready</div>
+                </div>
+
+                <form onSubmit={requestOtp} className="mt-6 grid gap-3">
+                  <input required type="tel" value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="Mobile number (e.g. +919876543210)" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3" />
+                  <button disabled={authLoading} className="rounded-2xl bg-[linear-gradient(135deg,#49b857,#2b9545)] px-4 py-3 font-semibold text-white shadow-[0_16px_30px_-18px_rgba(73,184,87,0.8)]">{authLoading ? "Sending OTP..." : "Send OTP"}</button>
+                </form>
+
+                {otpSent ? (
+                  <form onSubmit={verifyOtp} className="mt-4 grid gap-3 rounded-[24px] border border-slate-200 bg-slate-50 p-4">
+                    <input required value={otp} onChange={(event) => setOtp(event.target.value)} placeholder="Enter OTP" className="rounded-2xl border border-slate-200 bg-white px-4 py-3" />
+                    <button disabled={authLoading} className="rounded-2xl border border-slate-300 bg-white px-4 py-3 font-semibold text-slate-900">{authLoading ? "Verifying..." : "Verify OTP & Login"}</button>
+                  </form>
+                ) : null}
+
+                {passwordLoginVisible ? (
+                  <form onSubmit={loginWithPassword} className="mt-4 grid gap-3 rounded-[24px] border border-amber-200 bg-amber-50/70 p-4">
+                    <p className="text-sm font-semibold text-slate-800">Password login fallback</p>
+                    <input required type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Rider password" className="rounded-2xl border border-amber-200 bg-white px-4 py-3" />
+                    <button disabled={authLoading} className="rounded-2xl bg-[linear-gradient(135deg,#f59c3d,#ef7c2b)] px-4 py-3 font-semibold text-white shadow-[0_16px_30px_-18px_rgba(245,156,61,0.8)]">{authLoading ? "Signing in..." : "Login With Password"}</button>
+                  </form>
+                ) : null}
+
+                {error ? <p className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p> : null}
+              </div>
+            </div>
+          </div>
+        </section>
       </main>
     );
   }
 
   return (
-    <main className="mx-auto max-w-[1100px] px-6 py-6">
-      <header className="flex items-center justify-between gap-3">
-        <div>
-          <h1 className="text-3xl font-bold text-ocean">Vinayaka Rider Portal</h1>
-          <p className="mt-1 text-slate-600">Accept or reject trips, start, pickup complete, in transit, delivered, and proof upload.</p>
-        </div>
-        <button onClick={logout} className="rounded-md border px-3 py-2">Logout</button>
-      </header>
-
-      {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}
-
-      <section className="mt-4 grid gap-3">
-        {trips.map((trip) => (
-          <div key={trip.id} className="rounded-xl bg-white p-4 shadow">
-            <p className="font-semibold">{trip.bookings?.tracking_id ?? trip.booking_id} - {trip.status}</p>
-            <p className="text-sm text-slate-600">{trip.bookings?.pickup_address ?? "-"} to {trip.bookings?.drop_address ?? "-"}</p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <button onClick={() => tripAction(trip.id, "accept")} className="rounded-md border px-3 py-1 text-sm">Accept</button>
-              <button onClick={() => tripAction(trip.id, "reject")} className="rounded-md border px-3 py-1 text-sm">Reject</button>
-              <button onClick={() => tripAction(trip.id, "start")} className="rounded-md border px-3 py-1 text-sm">Start</button>
-              <button onClick={() => tripAction(trip.id, "pickup_complete")} className="rounded-md border px-3 py-1 text-sm">Pickup Complete</button>
-              <button onClick={() => tripAction(trip.id, "in_transit")} className="rounded-md border px-3 py-1 text-sm">In Transit</button>
-              <button onClick={() => tripAction(trip.id, "delivered")} className="rounded-md border px-3 py-1 text-sm">Delivered</button>
+    <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+      <section className="overflow-hidden rounded-[36px] border border-white/80 bg-white/80 p-5 shadow-[0_30px_90px_-40px_rgba(13,43,82,0.45)] backdrop-blur sm:p-6">
+        <header className="grid gap-5 lg:grid-cols-[1.1fr_0.9fr]">
+          <div className="rounded-[32px] bg-[linear-gradient(135deg,#0d2b52,#153b71)] px-6 py-7 text-white">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-200">Rider command</p>
+                <h1 className="mt-2 text-3xl font-bold">Hi, {me.full_name}</h1>
+                <p className="mt-2 max-w-xl text-sm leading-7 text-slate-200">Accept rides quickly, update trip status in one tap, and close deliveries with proof capture.</p>
+              </div>
+              <button onClick={logout} className="rounded-2xl border border-white/20 bg-white/10 px-4 py-3 text-sm font-semibold text-white">Logout</button>
             </div>
           </div>
-        ))}
-        {trips.length === 0 ? <p className="text-sm text-slate-600">No trips assigned.</p> : null}
-      </section>
 
-      <section className="mt-6 rounded-xl bg-white p-4 shadow">
-        <h2 className="text-xl font-semibold">Upload Delivery Proof</h2>
-        <form onSubmit={uploadProof} className="mt-3 grid gap-2 md:grid-cols-2">
+          <div className="grid gap-4 sm:grid-cols-3">
+            <MetricCard title="Active" value={activeTrips} tone="green" />
+            <MetricCard title="Waiting" value={pendingTrips} tone="orange" />
+            <MetricCard title="Delivered" value={completedTrips} tone="navy" />
+          </div>
+        </header>
+
+        {error ? <p className="mt-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p> : null}
+
+        <section className="mt-6 grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
+          <div className="grid gap-4">
+            <div className="rounded-[28px] border border-slate-200/80 bg-white p-5 shadow-[0_24px_70px_-34px_rgba(13,43,82,0.22)]">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-500">Assigned rides</p>
+                  <h2 className="mt-2 text-2xl font-bold text-slate-900">Trip queue</h2>
+                </div>
+                <div className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">Live sync</div>
+              </div>
+
+              <section className="mt-4 grid gap-3">
+        {trips.map((trip) => (
+                <div key={trip.id} className="rounded-[24px] border border-slate-200 bg-slate-50/70 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-lg font-semibold text-slate-900">{trip.bookings?.tracking_id ?? trip.booking_id}</p>
+                      <p className="mt-1 text-sm text-slate-600">{trip.bookings?.pickup_address ?? "-"} to {trip.bookings?.drop_address ?? "-"}</p>
+                    </div>
+                    <StatusBadge status={trip.status} />
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <ActionButton label="Accept" tone="green" onClick={() => tripAction(trip.id, "accept")} />
+                    <ActionButton label="Reject" tone="muted" onClick={() => tripAction(trip.id, "reject")} />
+                    <ActionButton label="Start" tone="navy" onClick={() => tripAction(trip.id, "start")} />
+                    <ActionButton label="Pickup Done" tone="orange" onClick={() => tripAction(trip.id, "pickup_complete")} />
+                    <ActionButton label="In Transit" tone="navy" onClick={() => tripAction(trip.id, "in_transit")} />
+                    <ActionButton label="Delivered" tone="green" onClick={() => tripAction(trip.id, "delivered")} />
+                  </div>
+                </div>
+        ))}
+                {trips.length === 0 ? <p className="rounded-2xl border border-dashed border-slate-200 px-4 py-6 text-center text-sm text-slate-600">No trips assigned yet.</p> : null}
+              </section>
+            </div>
+          </div>
+
+          <section className="rounded-[28px] border border-slate-200/80 bg-white p-5 shadow-[0_24px_70px_-34px_rgba(13,43,82,0.22)]">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-500">Close delivery</p>
+                <h2 className="mt-2 text-2xl font-bold text-slate-900">Upload proof</h2>
+              </div>
+              <div className="rounded-full bg-orange-50 px-3 py-1 text-xs font-semibold text-orange-700">Play Store ready</div>
+            </div>
+
+            <form onSubmit={uploadProof} className="mt-4 grid gap-3 md:grid-cols-2">
           <select aria-label="Proof trip" required value={proofForm.trip_id} onChange={(event) => {
             const selectedTrip = trips.find((trip) => trip.id === event.target.value);
             setProofForm((value) => ({ ...value, trip_id: event.target.value, booking_id: selectedTrip?.booking_id ?? "" }));
-          }} className="rounded-md border px-3 py-2">
+          }} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
             <option value="">Select trip</option>
             {trips.map((trip) => <option key={trip.id} value={trip.id}>{trip.bookings?.tracking_id ?? trip.id}</option>)}
           </select>
-          <input required value={proofForm.photo_url} onChange={(event) => setProofForm((value) => ({ ...value, photo_url: event.target.value }))} placeholder="Photo URL" className="rounded-md border px-3 py-2" />
-          <input required value={proofForm.signature_url} onChange={(event) => setProofForm((value) => ({ ...value, signature_url: event.target.value }))} placeholder="Signature URL" className="rounded-md border px-3 py-2" />
-          <input value={proofForm.note} onChange={(event) => setProofForm((value) => ({ ...value, note: event.target.value }))} placeholder="Note" className="rounded-md border px-3 py-2" />
-          <button className="rounded-md bg-ocean px-4 py-2 font-semibold text-white">Upload Proof</button>
-        </form>
+          <input required value={proofForm.photo_url} onChange={(event) => setProofForm((value) => ({ ...value, photo_url: event.target.value }))} placeholder="Photo URL" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3" />
+          <input required value={proofForm.signature_url} onChange={(event) => setProofForm((value) => ({ ...value, signature_url: event.target.value }))} placeholder="Signature URL" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3" />
+          <input value={proofForm.note} onChange={(event) => setProofForm((value) => ({ ...value, note: event.target.value }))} placeholder="Delivery note" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3" />
+          <button className="rounded-2xl bg-[linear-gradient(135deg,#49b857,#2b9545)] px-4 py-3 font-semibold text-white shadow-[0_16px_30px_-18px_rgba(73,184,87,0.8)]">Upload Proof</button>
+            </form>
+          </section>
+        </section>
       </section>
     </main>
   );
+}
+
+function MetricCard({ title, value, tone }: { title: string; value: number; tone: "green" | "orange" | "navy" }) {
+  const styles = {
+    green: "bg-emerald-50 text-emerald-700 border-emerald-100",
+    orange: "bg-orange-50 text-orange-700 border-orange-100",
+    navy: "bg-slate-100 text-slate-800 border-slate-200",
+  } as const;
+
+  return (
+    <article className={`rounded-[28px] border p-5 shadow-[0_24px_70px_-34px_rgba(13,43,82,0.18)] ${styles[tone]}`}>
+      <p className="text-xs font-semibold uppercase tracking-[0.28em]">{title}</p>
+      <p className="mt-3 text-3xl font-bold">{value}</p>
+    </article>
+  );
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const palette: Record<string, string> = {
+    assigned: "bg-blue-50 text-blue-700",
+    accepted: "bg-emerald-50 text-emerald-700",
+    started: "bg-slate-100 text-slate-800",
+    pickup_complete: "bg-orange-50 text-orange-700",
+    in_transit: "bg-indigo-50 text-indigo-700",
+    delivered: "bg-emerald-50 text-emerald-700",
+    reject: "bg-red-50 text-red-700",
+  };
+
+  return <span className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] ${palette[status] ?? "bg-slate-100 text-slate-700"}`}>{status.replaceAll("_", " ")}</span>;
+}
+
+function ActionButton({ label, tone, onClick }: { label: string; tone: "green" | "orange" | "navy" | "muted"; onClick: () => void }) {
+  const styles = {
+    green: "bg-emerald-600 text-white",
+    orange: "bg-orange-500 text-white",
+    navy: "bg-slate-900 text-white",
+    muted: "bg-white text-slate-800 border border-slate-300",
+  } as const;
+
+  return <button onClick={onClick} className={`rounded-2xl px-4 py-2 text-sm font-semibold shadow-sm ${styles[tone]}`}>{label}</button>;
 }
