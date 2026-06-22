@@ -315,7 +315,7 @@ export default function AdminPortalPage() {
     try {
       setError("");
       const password = `Temp@${Date.now()}`;
-      await requestWithRetry("/auth/register", {
+      const created = await requestWithRetry<{ user: { id: string } }>("/auth/register", {
         method: "POST",
         body: JSON.stringify({
           fullName: newUser.full_name,
@@ -326,10 +326,62 @@ export default function AdminPortalPage() {
         }),
       });
 
+      if (newUser.role === "driver") {
+        await requestWithRetry("/drivers", {
+          method: "POST",
+          body: JSON.stringify({
+            user_id: created.user.id,
+            status: "available",
+            is_approved: true,
+          }),
+        });
+      }
+
       setNewUser({ full_name: "", email: "", role: "operations_staff", phone: "" });
       await reloadAll();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Unable to create user";
+      setError(message);
+    }
+  }
+
+  async function syncAndApproveRiders() {
+    try {
+      setError("");
+      const riderUsers = users.filter((user) => user.role === "driver");
+      const existingByUserId = new Map<string, DriverRecord>();
+      for (const driver of drivers) {
+        existingByUserId.set(driver.user_id, driver);
+      }
+
+      for (const rider of riderUsers) {
+        const existing = existingByUserId.get(rider.id);
+        if (!existing) {
+          await requestWithRetry("/drivers", {
+            method: "POST",
+            body: JSON.stringify({
+              user_id: rider.id,
+              status: "available",
+              is_approved: true,
+            }),
+          });
+          continue;
+        }
+
+        if (!existing.is_approved || existing.status === "offline") {
+          await requestWithRetry(`/drivers/${existing.id}`, {
+            method: "PATCH",
+            body: JSON.stringify({
+              is_approved: true,
+              status: "available",
+            }),
+          });
+        }
+      }
+
+      await reloadAll();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Unable to sync rider profiles";
       setError(message);
     }
   }
@@ -519,7 +571,7 @@ export default function AdminPortalPage() {
           <div className="mt-3 grid gap-2">
             <input required value={newUser.full_name} onChange={(event) => setNewUser((value) => ({ ...value, full_name: event.target.value }))} placeholder="Full name" className="rounded-md border px-3 py-2" />
             <input required type="email" value={newUser.email} onChange={(event) => setNewUser((value) => ({ ...value, email: event.target.value }))} placeholder="Email" className="rounded-md border px-3 py-2" />
-            <input value={newUser.phone} onChange={(event) => setNewUser((value) => ({ ...value, phone: event.target.value }))} placeholder="Phone" className="rounded-md border px-3 py-2" />
+            <input value={newUser.phone} onChange={(event) => setNewUser((value) => ({ ...value, phone: event.target.value }))} placeholder="Phone (e.g. +91XXXXXXXXXX)" className="rounded-md border px-3 py-2" />
             <select aria-label="User role" value={newUser.role} onChange={(event) => setNewUser((value) => ({ ...value, role: event.target.value as Role }))} className="rounded-md border px-3 py-2">
               <option value="admin">Admin</option>
               <option value="operations_staff">Operations Staff</option>
@@ -527,17 +579,18 @@ export default function AdminPortalPage() {
               <option value="customer">Customer</option>
             </select>
             <button className="rounded-md bg-ocean px-4 py-2 font-semibold text-white">Create User</button>
+            <button type="button" onClick={syncAndApproveRiders} className="rounded-md border px-4 py-2 font-semibold">Sync and Approve Rider Profiles</button>
           </div>
         </form>
 
         <form onSubmit={createBranch} className="rounded-xl bg-white p-4 shadow">
           <h2 className="text-xl font-semibold">Create Branch</h2>
           <div className="mt-3 grid gap-2">
-            <input required value={newBranch.name} onChange={(event) => setNewBranch((value) => ({ ...value, name: event.target.value }))} placeholder="Branch name" className="rounded-md border px-3 py-2" />
-            <input required value={newBranch.city} onChange={(event) => setNewBranch((value) => ({ ...value, city: event.target.value }))} placeholder="City" className="rounded-md border px-3 py-2" />
+            <input required value={newBranch.name} onChange={(event) => setNewBranch((value) => ({ ...value, name: event.target.value }))} placeholder="Branch name (e.g. Tirupati Hub)" className="rounded-md border px-3 py-2" />
+            <input required value={newBranch.city} onChange={(event) => setNewBranch((value) => ({ ...value, city: event.target.value }))} placeholder="City (Nellore / Podalakur / Tirupati)" className="rounded-md border px-3 py-2" />
             <div className="grid grid-cols-2 gap-2">
-              <input required type="number" step="0.0001" value={newBranch.latitude} onChange={(event) => setNewBranch((value) => ({ ...value, latitude: event.target.value }))} placeholder="Latitude" className="rounded-md border px-3 py-2" />
-              <input required type="number" step="0.0001" value={newBranch.longitude} onChange={(event) => setNewBranch((value) => ({ ...value, longitude: event.target.value }))} placeholder="Longitude" className="rounded-md border px-3 py-2" />
+              <input required type="number" step="0.0001" value={newBranch.latitude} onChange={(event) => setNewBranch((value) => ({ ...value, latitude: event.target.value }))} placeholder="Latitude (e.g. 14.4426)" className="rounded-md border px-3 py-2" />
+              <input required type="number" step="0.0001" value={newBranch.longitude} onChange={(event) => setNewBranch((value) => ({ ...value, longitude: event.target.value }))} placeholder="Longitude (e.g. 79.9865)" className="rounded-md border px-3 py-2" />
             </div>
             <input required type="number" step="0.1" value={newBranch.radius_km} onChange={(event) => setNewBranch((value) => ({ ...value, radius_km: event.target.value }))} placeholder="Radius (km)" className="rounded-md border px-3 py-2" />
             <button className="rounded-md bg-ocean px-4 py-2 font-semibold text-white">Create Branch</button>

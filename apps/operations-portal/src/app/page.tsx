@@ -208,7 +208,7 @@ export default function OperationsPortalPage() {
     ]);
 
     setBranches(branchData);
-    setDrivers(driverData.filter((driver) => driver.is_approved));
+    setDrivers(driverData);
     setBookings(bookingData.items ?? []);
     setTrips(tripData);
     setUsers(userData);
@@ -460,19 +460,19 @@ export default function OperationsPortalPage() {
               <option value="">Select branch</option>
               {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
             </select>
-            <input required value={bookingForm.sender_name} onChange={(event) => setBookingForm((value) => ({ ...value, sender_name: event.target.value }))} placeholder="Sender name" className="rounded-md border px-3 py-2" />
-            <input required value={bookingForm.sender_phone} onChange={(event) => setBookingForm((value) => ({ ...value, sender_phone: event.target.value }))} placeholder="Sender phone" className="rounded-md border px-3 py-2" />
-            <input required value={bookingForm.receiver_name} onChange={(event) => setBookingForm((value) => ({ ...value, receiver_name: event.target.value }))} placeholder="Receiver name" className="rounded-md border px-3 py-2" />
-            <input required value={bookingForm.receiver_phone} onChange={(event) => setBookingForm((value) => ({ ...value, receiver_phone: event.target.value }))} placeholder="Receiver phone" className="rounded-md border px-3 py-2" />
-            <input required value={bookingForm.pickup_address} onChange={(event) => setBookingForm((value) => ({ ...value, pickup_address: event.target.value }))} placeholder="Pickup address" className="rounded-md border px-3 py-2" />
+            <input required value={bookingForm.sender_name} onChange={(event) => setBookingForm((value) => ({ ...value, sender_name: event.target.value }))} placeholder="Sender name (e.g. Ravi Kumar)" className="rounded-md border px-3 py-2" />
+            <input required value={bookingForm.sender_phone} onChange={(event) => setBookingForm((value) => ({ ...value, sender_phone: event.target.value }))} placeholder="Sender phone (+91...)" className="rounded-md border px-3 py-2" />
+            <input required value={bookingForm.receiver_name} onChange={(event) => setBookingForm((value) => ({ ...value, receiver_name: event.target.value }))} placeholder="Receiver name (e.g. Suresh Reddy)" className="rounded-md border px-3 py-2" />
+            <input required value={bookingForm.receiver_phone} onChange={(event) => setBookingForm((value) => ({ ...value, receiver_phone: event.target.value }))} placeholder="Receiver phone (+91...)" className="rounded-md border px-3 py-2" />
+            <input required value={bookingForm.pickup_address} onChange={(event) => setBookingForm((value) => ({ ...value, pickup_address: event.target.value }))} placeholder="Pickup address (e.g. RTC Bus Stand, Nellore)" className="rounded-md border px-3 py-2" />
             <div className="grid grid-cols-2 gap-2">
-              <input required type="number" step="0.0001" value={bookingForm.pickup_lat} onChange={(event) => setBookingForm((value) => ({ ...value, pickup_lat: event.target.value }))} placeholder="Pickup lat" className="rounded-md border px-3 py-2" />
-              <input required type="number" step="0.0001" value={bookingForm.pickup_lng} onChange={(event) => setBookingForm((value) => ({ ...value, pickup_lng: event.target.value }))} placeholder="Pickup lng" className="rounded-md border px-3 py-2" />
+              <input required type="number" step="0.0001" value={bookingForm.pickup_lat} onChange={(event) => setBookingForm((value) => ({ ...value, pickup_lat: event.target.value }))} placeholder="Pickup lat (14.4426)" className="rounded-md border px-3 py-2" />
+              <input required type="number" step="0.0001" value={bookingForm.pickup_lng} onChange={(event) => setBookingForm((value) => ({ ...value, pickup_lng: event.target.value }))} placeholder="Pickup lng (79.9865)" className="rounded-md border px-3 py-2" />
             </div>
-            <input required value={bookingForm.drop_address} onChange={(event) => setBookingForm((value) => ({ ...value, drop_address: event.target.value }))} placeholder="Drop address" className="rounded-md border px-3 py-2" />
+            <input required value={bookingForm.drop_address} onChange={(event) => setBookingForm((value) => ({ ...value, drop_address: event.target.value }))} placeholder="Drop address (e.g. Podalakur Main Center)" className="rounded-md border px-3 py-2" />
             <div className="grid grid-cols-2 gap-2">
-              <input required type="number" step="0.0001" value={bookingForm.drop_lat} onChange={(event) => setBookingForm((value) => ({ ...value, drop_lat: event.target.value }))} placeholder="Drop lat" className="rounded-md border px-3 py-2" />
-              <input required type="number" step="0.0001" value={bookingForm.drop_lng} onChange={(event) => setBookingForm((value) => ({ ...value, drop_lng: event.target.value }))} placeholder="Drop lng" className="rounded-md border px-3 py-2" />
+              <input required type="number" step="0.0001" value={bookingForm.drop_lat} onChange={(event) => setBookingForm((value) => ({ ...value, drop_lat: event.target.value }))} placeholder="Drop lat (14.3844)" className="rounded-md border px-3 py-2" />
+              <input required type="number" step="0.0001" value={bookingForm.drop_lng} onChange={(event) => setBookingForm((value) => ({ ...value, drop_lng: event.target.value }))} placeholder="Drop lng (79.9267)" className="rounded-md border px-3 py-2" />
             </div>
             <select aria-label="Booking vehicle type" value={bookingForm.vehicle_type} onChange={(event) => setBookingForm((value) => ({ ...value, vehicle_type: event.target.value }))} className="rounded-md border px-3 py-2">
               <option value="bike">Bike</option>
@@ -500,9 +500,10 @@ export default function OperationsPortalPage() {
             <select aria-label="Assignment driver" required value={assignment.driver_id} onChange={(event) => setAssignment((value) => ({ ...value, driver_id: event.target.value }))} className="rounded-md border px-3 py-2">
               <option value="">Select driver</option>
               {drivers.map((driver) => (
-                <option key={driver.id} value={driver.id}>{driver.id.slice(0, 8)} - {driver.status}</option>
+                <option key={driver.id} value={driver.id}>{driver.id.slice(0, 8)} - {driver.status} {driver.is_approved ? "(approved)" : "(pending)"}</option>
               ))}
             </select>
+            {drivers.length === 0 ? <p className="text-xs text-amber-700">No riders available. In Admin, run Sync and Approve Rider Profiles first.</p> : null}
             <button className="rounded-md bg-ocean px-4 py-2 font-semibold text-white">Assign / Reassign</button>
           </div>
         </form>
