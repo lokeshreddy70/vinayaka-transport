@@ -1,0 +1,67 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: vinayaka_transport
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  api:
+    build:
+      context: ../../services/api
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/vinayaka_transport
+      JWT_SECRET: vinayaka-transport-secret
+      API_PORT: 4000
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - postgres
+      - redis
+    ports:
+      - "4000:4000"
+
+  realtime:
+    build:
+      context: ../../services/realtime
+      dockerfile: Dockerfile
+    environment:
+      REALTIME_PORT: 4100
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - redis
+    ports:
+      - "4100:4100"
+
+  notifications:
+    build:
+      context: ../../services/notifications
+      dockerfile: Dockerfile
+    environment:
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - redis
+
+  nginx:
+    image: nginx:1.27-alpine
+    depends_on:
+      - api
+      - realtime
+    ports:
+      - "80:80"
+    volumes:
+      - ../nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+
+volumes:
+  postgres_data:
