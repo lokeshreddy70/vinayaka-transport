@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 
 type Role = "customer" | "driver" | "operations_staff" | "admin";
 
@@ -52,14 +52,21 @@ export default function RiderPortalPage() {
   const [error, setError] = useState("");
 
   const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
   const [otp, setOtp] = useState("");
   const [password, setPassword] = useState("");
   const [otpSent, setOtpSent] = useState(false);
   const [authLoading, setAuthLoading] = useState(false);
-  const [passwordLoginVisible, setPasswordLoginVisible] = useState(false);
+  const [passwordLoginVisible, setPasswordLoginVisible] = useState(true);
+  const [authMode, setAuthMode] = useState<"otp" | "email">("otp");
 
   const [trips, setTrips] = useState<Trip[]>([]);
   const [proofForm, setProofForm] = useState({ booking_id: "", trip_id: "", photo_url: "", signature_url: "", note: "" });
+
+  const activeTrackingTrip = useMemo(
+    () => trips.find((trip) => ["assigned", "accepted", "started", "pickup_complete", "in_transit"].includes(trip.status)),
+    [trips]
+  );
 
   useEffect(() => {
     const stored = localStorage.getItem(TOKEN_KEY) ?? "";
@@ -178,9 +185,13 @@ export default function RiderPortalPage() {
       setPasswordLoginVisible(false);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Unable to send OTP";
-      if (message.toLowerCase().includes("unsupported phone provider")) {
+      if (
+        message.toLowerCase().includes("unsupported phone provider") ||
+        message.toLowerCase().includes("sms provider is not configured") ||
+        message.toLowerCase().includes("phone provider")
+      ) {
         setPasswordLoginVisible(true);
-        setError("SMS OTP is not enabled on the backend yet. Use rider password login below for now, or enable the phone OTP provider in Supabase.");
+        setError("SMS OTP provider is not configured. Use password login below, then enable Supabase Phone Auth with Twilio Verify credentials.");
       } else {
         setError(message);
       }
@@ -245,6 +256,38 @@ export default function RiderPortalPage() {
     }
   }
 
+  async function loginWithEmail(event: FormEvent) {
+    event.preventDefault();
+    try {
+      setAuthLoading(true);
+      setError("");
+      const response = await fetch(`${API_URL}/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error ?? "Unable to login with email");
+      }
+
+      if (data.user?.role !== "driver") {
+        throw new Error("Driver role required");
+      }
+
+      localStorage.setItem(TOKEN_KEY, data.access_token);
+      localStorage.setItem(REFRESH_TOKEN_KEY, data.refresh_token);
+      setToken(data.access_token);
+      setRefreshToken(data.refresh_token);
+      setPassword("");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Unable to login with email";
+      setError(message);
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
   async function tripAction(tripId: string, action: string) {
     try {
       setError("");
@@ -274,6 +317,53 @@ export default function RiderPortalPage() {
       setError(message);
     }
   }
+
+  useEffect(() => {
+    if (!token || !activeTrackingTrip || typeof navigator === "undefined" || !navigator.geolocation) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const syncPosition = () => {
+      navigator.geolocation.getCurrentPosition(
+        async (position) => {
+          if (cancelled) {
+            return;
+          }
+
+          try {
+            await requestWithRetry("/riders/location", {
+              method: "POST",
+              body: JSON.stringify({
+                trip_id: activeTrackingTrip.id,
+                latitude: position.coords.latitude,
+                longitude: position.coords.longitude,
+              }),
+            });
+          } catch {
+            // Intentionally silent to avoid disrupting rider workflow.
+          }
+        },
+        () => {
+          // Keep rider workflow uninterrupted if GPS is denied temporarily.
+        },
+        {
+          enableHighAccuracy: true,
+          maximumAge: 2000,
+          timeout: 8000,
+        }
+      );
+    };
+
+    syncPosition();
+    const timer = setInterval(syncPosition, 5000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [activeTrackingTrip?.id, token]);
 
   function logout() {
     clearSession();
@@ -322,21 +412,49 @@ export default function RiderPortalPage() {
                   <div className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">Field ready</div>
                 </div>
 
-                <form onSubmit={requestOtp} className="mt-6 grid gap-3">
-                  <input required type="tel" value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="Mobile number (e.g. +919876543210)" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3" />
-                  <button disabled={authLoading} className="rounded-2xl bg-[linear-gradient(135deg,#49b857,#2b9545)] px-4 py-3 font-semibold text-white shadow-[0_16px_30px_-18px_rgba(73,184,87,0.8)]">{authLoading ? "Sending OTP..." : "Send OTP"}</button>
-                </form>
+                <div className="mt-5 grid grid-cols-2 gap-2 rounded-[20px] border border-slate-200 bg-slate-50 p-2">
+                  <button
+                    type="button"
+                    onClick={() => setAuthMode("otp")}
+                    className={`rounded-xl px-3 py-2 text-sm font-semibold ${authMode === "otp" ? "bg-slate-900 text-white" : "bg-white text-slate-700"}`}
+                  >
+                    OTP Login
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAuthMode("email")}
+                    className={`rounded-xl px-3 py-2 text-sm font-semibold ${authMode === "email" ? "bg-slate-900 text-white" : "bg-white text-slate-700"}`}
+                  >
+                    Email Login
+                  </button>
+                </div>
 
-                {otpSent ? (
-                  <form onSubmit={verifyOtp} className="mt-4 grid gap-3 rounded-[24px] border border-slate-200 bg-slate-50 p-4">
-                    <input required value={otp} onChange={(event) => setOtp(event.target.value)} placeholder="Enter OTP" className="rounded-2xl border border-slate-200 bg-white px-4 py-3" />
-                    <button disabled={authLoading} className="rounded-2xl border border-slate-300 bg-white px-4 py-3 font-semibold text-slate-900">{authLoading ? "Verifying..." : "Verify OTP & Login"}</button>
+                {authMode === "otp" ? (
+                  <>
+                    <form onSubmit={requestOtp} className="mt-6 grid gap-3">
+                      <input required type="tel" value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="Mobile number (e.g. +919876543210)" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3" />
+                      <button disabled={authLoading} className="rounded-2xl bg-[linear-gradient(135deg,#49b857,#2b9545)] px-4 py-3 font-semibold text-white shadow-[0_16px_30px_-18px_rgba(73,184,87,0.8)]">{authLoading ? "Sending OTP..." : "Send OTP"}</button>
+                    </form>
+
+                    {otpSent ? (
+                      <form onSubmit={verifyOtp} className="mt-4 grid gap-3 rounded-[24px] border border-slate-200 bg-slate-50 p-4">
+                        <input required value={otp} onChange={(event) => setOtp(event.target.value)} placeholder="Enter OTP" className="rounded-2xl border border-slate-200 bg-white px-4 py-3" />
+                        <button disabled={authLoading} className="rounded-2xl border border-slate-300 bg-white px-4 py-3 font-semibold text-slate-900">{authLoading ? "Verifying..." : "Verify OTP & Login"}</button>
+                      </form>
+                    ) : null}
+                  </>
+                ) : (
+                  <form onSubmit={loginWithEmail} className="mt-6 grid gap-3 rounded-[24px] border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-sm font-semibold text-slate-800">Email login fallback</p>
+                    <input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Email address" className="rounded-2xl border border-slate-200 bg-white px-4 py-3" />
+                    <input required type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Password" className="rounded-2xl border border-slate-200 bg-white px-4 py-3" />
+                    <button disabled={authLoading} className="rounded-2xl bg-[linear-gradient(135deg,#0d2b52,#153b71)] px-4 py-3 font-semibold text-white shadow-[0_16px_30px_-18px_rgba(13,43,82,0.8)]">{authLoading ? "Signing in..." : "Login With Email"}</button>
                   </form>
-                ) : null}
+                )}
 
-                {passwordLoginVisible ? (
+                {passwordLoginVisible && authMode === "otp" ? (
                   <form onSubmit={loginWithPassword} className="mt-4 grid gap-3 rounded-[24px] border border-amber-200 bg-amber-50/70 p-4">
-                    <p className="text-sm font-semibold text-slate-800">Password login fallback</p>
+                    <p className="text-sm font-semibold text-slate-800">Password fallback for drivers without email access</p>
                     <input required type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Rider password" className="rounded-2xl border border-amber-200 bg-white px-4 py-3" />
                     <button disabled={authLoading} className="rounded-2xl bg-[linear-gradient(135deg,#f59c3d,#ef7c2b)] px-4 py-3 font-semibold text-white shadow-[0_16px_30px_-18px_rgba(245,156,61,0.8)]">{authLoading ? "Signing in..." : "Login With Password"}</button>
                   </form>

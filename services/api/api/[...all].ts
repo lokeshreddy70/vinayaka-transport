@@ -41,6 +41,46 @@ const riderPasswordLoginSchema = z.object({
   password: z.string().min(8),
 });
 
+const customerOtpRequestSchema = z.object({
+  phone: z.string().min(10).max(20),
+});
+
+const customerOtpVerifySchema = z.object({
+  phone: z.string().min(10).max(20),
+  token: z.string().min(4).max(10),
+});
+
+const customerPasswordLoginSchema = z.object({
+  phone: z.string().min(10).max(20),
+  password: z.string().min(8),
+});
+
+const customerRegisterSchema = z.object({
+  fullName: z.string().min(2),
+  phone: z.string().min(10).max(20),
+  password: z.string().min(8),
+});
+
+const customerOrderSchema = z.object({
+  pickupAddress: z.string().min(5).optional(),
+  dropAddress: z.string().min(5).optional(),
+  pickupLat: z.number().optional(),
+  pickupLng: z.number().optional(),
+  dropLat: z.number().optional(),
+  dropLng: z.number().optional(),
+  parcelCategory: z.string().optional(),
+  parcelWeight: z.number().nonnegative().optional(),
+  vehicleType: z.string().optional(),
+  deliveryType: z.string().optional(),
+  isFragile: z.boolean().optional(),
+});
+
+const riderLocationSchema = z.object({
+  trip_id: z.string().uuid(),
+  latitude: z.number().min(-90).max(90),
+  longitude: z.number().min(-180).max(180),
+});
+
 const bookingSchema = z.object({
   branch_id: z.string().uuid(),
   sender_name: z.string().min(2),
@@ -69,8 +109,59 @@ function getClientIp(req: IncomingMessage): string {
   return req.socket.remoteAddress ?? "unknown";
 }
 
-function randomTrackingId(): string {
-  return `VT${Date.now().toString().slice(-8)}${Math.floor(Math.random() * 9000 + 1000)}`;
+function normalizePhone(phone: string): string {
+  const trimmed = sanitizeText(phone).replace(/\s+/g, "");
+  const digits = trimmed.replace(/\D/g, "");
+
+  if (trimmed.startsWith("+")) {
+    return `+${digits}`;
+  }
+
+  if (digits.length === 10) {
+    return `+91${digits}`;
+  }
+
+  return digits.startsWith("91") ? `+${digits}` : `+${digits}`;
+}
+
+function mapOtpProviderError(message: string): string {
+  const normalized = message.toLowerCase();
+
+  if (normalized.includes("unsupported phone provider")) {
+    return "SMS provider is not configured. In Supabase Auth, enable Phone login and configure Twilio credentials (Account SID, Auth Token, Verify Service SID).";
+  }
+
+  if (normalized.includes("sms provider is not configured") || normalized.includes("provider is not enabled")) {
+    return "SMS OTP is disabled in Supabase Auth settings. Enable Phone provider and attach Twilio Verify.";
+  }
+
+  if (normalized.includes("invalid phone number")) {
+    return "Invalid phone number format. Use E.164 format, for example +919876543210.";
+  }
+
+  return message;
+}
+
+function customerEmailFromPhone(phone: string): string {
+  const digits = phone.replace(/\D/g, "");
+  return `${digits}@vinayaka.customer.local`;
+}
+
+async function generateTrackingId(): Promise<string> {
+  const year = new Date().getFullYear();
+  const prefix = `VT-${year}-`;
+
+  const { count, error } = await supabaseAdmin
+    .from("bookings")
+    .select("id", { count: "exact", head: true })
+    .ilike("tracking_id", `${prefix}%`);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const next = ((count ?? 0) + 1).toString().padStart(6, "0");
+  return `${prefix}${next}`;
 }
 
 async function auditLog(context: AuthContext | undefined, action: string, resource: string, resourceId?: string) {
@@ -230,11 +321,11 @@ async function handleRiderRequestOtp(req: IncomingMessage, res: ServerResponse) 
     return;
   }
 
-  const phone = sanitizeText(parsed.data.phone);
+  const phone = normalizePhone(parsed.data.phone);
   const { error } = await supabaseAnon.auth.signInWithOtp({ phone });
 
   if (error) {
-    json(res, 400, { error: error.message });
+    json(res, 400, { error: mapOtpProviderError(error.message) });
     return;
   }
 
@@ -250,13 +341,13 @@ async function handleRiderVerifyOtp(req: IncomingMessage, res: ServerResponse) {
 
   const payload = parsed.data;
   const { data, error } = await supabaseAnon.auth.verifyOtp({
-    phone: sanitizeText(payload.phone),
+    phone: normalizePhone(payload.phone),
     token: sanitizeText(payload.token),
     type: "sms",
   });
 
   if (error || !data.session || !data.user) {
-    json(res, 401, { error: error?.message ?? "Invalid OTP" });
+    json(res, 401, { error: mapOtpProviderError(error?.message ?? "Invalid OTP") });
     return;
   }
 
@@ -322,6 +413,166 @@ async function handleRiderPasswordLogin(req: IncomingMessage, res: ServerRespons
     expires_in: signInData.session.expires_in,
     user: profile,
   });
+}
+
+async function handleCustomerRequestOtp(req: IncomingMessage, res: ServerResponse) {
+  const parsed = customerOtpRequestSchema.safeParse(await parseBody(req));
+  if (!parsed.success) {
+    json(res, 400, { error: "Invalid OTP request payload", details: parsed.error.flatten() });
+    return;
+  }
+
+  const phone = normalizePhone(parsed.data.phone);
+  const { error } = await supabaseAnon.auth.signInWithOtp({ phone });
+
+  if (error) {
+    json(res, 400, { error: mapOtpProviderError(error.message) });
+    return;
+  }
+
+  json(res, 200, { ok: true, message: "OTP sent" });
+}
+
+async function handleCustomerVerifyOtp(req: IncomingMessage, res: ServerResponse) {
+  const parsed = customerOtpVerifySchema.safeParse(await parseBody(req));
+  if (!parsed.success) {
+    json(res, 400, { error: "Invalid OTP verify payload", details: parsed.error.flatten() });
+    return;
+  }
+
+  const payload = parsed.data;
+  const { data, error } = await supabaseAnon.auth.verifyOtp({
+    phone: normalizePhone(payload.phone),
+    token: sanitizeText(payload.token),
+    type: "sms",
+  });
+
+  if (error || !data.session || !data.user) {
+    json(res, 401, { error: mapOtpProviderError(error?.message ?? "Invalid OTP") });
+    return;
+  }
+
+  const { data: profile, error: profileError } = await supabaseAdmin
+    .from("users")
+    .select("id, auth_user_id, full_name, email, phone, role")
+    .eq("auth_user_id", data.user.id)
+    .maybeSingle();
+
+  if (profileError || !profile) {
+    json(res, 401, { error: "Profile not found" });
+    return;
+  }
+
+  if (profile.role !== "customer") {
+    json(res, 403, { error: "Only customer accounts can use customer OTP login" });
+    return;
+  }
+
+  json(res, 200, {
+    access_token: data.session.access_token,
+    refresh_token: data.session.refresh_token,
+    expires_in: data.session.expires_in,
+    user: profile,
+  });
+}
+
+async function handleCustomerPasswordLogin(req: IncomingMessage, res: ServerResponse) {
+  const parsed = customerPasswordLoginSchema.safeParse(await parseBody(req));
+  if (!parsed.success) {
+    json(res, 400, { error: "Invalid customer password login payload", details: parsed.error.flatten() });
+    return;
+  }
+
+  const phone = normalizePhone(parsed.data.phone);
+  const password = parsed.data.password;
+
+  const { data: profile, error: profileError } = await supabaseAdmin
+    .from("users")
+    .select("id, auth_user_id, full_name, email, phone, role")
+    .eq("phone", phone)
+    .eq("role", "customer")
+    .maybeSingle();
+
+  if (profileError || !profile) {
+    json(res, 401, { error: "Customer account not found for this mobile number" });
+    return;
+  }
+
+  const { data: signInData, error: signInError } = await supabaseAnon.auth.signInWithPassword({
+    email: profile.email,
+    password,
+  });
+
+  if (signInError || !signInData.session || !signInData.user) {
+    json(res, 401, { error: signInError?.message ?? "Invalid mobile number or password" });
+    return;
+  }
+
+  json(res, 200, {
+    access_token: signInData.session.access_token,
+    refresh_token: signInData.session.refresh_token,
+    expires_in: signInData.session.expires_in,
+    user: profile,
+  });
+}
+
+async function handleCustomerRegister(req: IncomingMessage, res: ServerResponse) {
+  const parsed = customerRegisterSchema.safeParse(await parseBody(req));
+  if (!parsed.success) {
+    json(res, 400, { error: "Invalid customer registration payload", details: parsed.error.flatten() });
+    return;
+  }
+
+  const fullName = sanitizeText(parsed.data.fullName);
+  const phone = normalizePhone(parsed.data.phone);
+  const password = parsed.data.password;
+  const email = customerEmailFromPhone(phone);
+
+  const { data: existingPhone } = await supabaseAdmin
+    .from("users")
+    .select("id")
+    .eq("phone", phone)
+    .eq("role", "customer")
+    .maybeSingle();
+
+  if (existingPhone) {
+    json(res, 409, { error: "A customer account with this mobile number already exists" });
+    return;
+  }
+
+  const { data: created, error: createError } = await supabaseAdmin.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+    phone,
+    phone_confirm: true,
+    user_metadata: {
+      full_name: fullName,
+      role: "customer",
+      phone,
+    },
+  });
+
+  if (createError || !created.user) {
+    json(res, 400, { error: createError?.message ?? "Unable to create customer user" });
+    return;
+  }
+
+  const { error: profileError } = await supabaseAdmin.from("users").insert({
+    auth_user_id: created.user.id,
+    full_name: fullName,
+    email,
+    phone,
+    role: "customer",
+  });
+
+  if (profileError) {
+    await supabaseAdmin.auth.admin.deleteUser(created.user.id);
+    json(res, 400, { error: profileError.message });
+    return;
+  }
+
+  json(res, 201, { ok: true, message: "Customer account created" });
 }
 
 async function handleAuthMe(res: ServerResponse, context: AuthContext | undefined) {
@@ -483,35 +734,52 @@ async function handleBookings(req: IncomingMessage, res: ServerResponse, segment
     }
 
     const payload = parsed.data;
-    const tracking_id = randomTrackingId();
     const estimated_arrival_at = new Date(Date.now() + 60 * 60 * 1000).toISOString();
 
-    const { data: created, error: createError } = await supabaseAdmin
-      .from("bookings")
-      .insert({
-        tracking_id,
-        customer_user_id: context.profile.id,
-        branch_id: payload.branch_id,
-        sender_name: sanitizeText(payload.sender_name),
-        sender_phone: sanitizeText(payload.sender_phone),
-        receiver_name: sanitizeText(payload.receiver_name),
-        receiver_phone: sanitizeText(payload.receiver_phone),
-        pickup_address: sanitizeText(payload.pickup_address),
-        pickup_lat: payload.pickup_lat,
-        pickup_lng: payload.pickup_lng,
-        drop_address: sanitizeText(payload.drop_address),
-        drop_lat: payload.drop_lat,
-        drop_lng: payload.drop_lng,
-        vehicle_type: payload.vehicle_type,
-        parcel_weight_kg: payload.parcel_weight_kg ?? null,
-        parcel_notes: sanitizeText(payload.parcel_notes ?? ""),
-        cod_required: payload.cod_required,
-        cod_amount: payload.cod_amount ?? null,
-        status: "booked",
-        estimated_arrival_at,
-      })
-      .select("*")
-      .single();
+    let created: any | null = null;
+    let createError: any = null;
+
+    // Retry ID generation to avoid race-condition collisions under concurrent inserts.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const tracking_id = await generateTrackingId();
+      const result = await supabaseAdmin
+        .from("bookings")
+        .insert({
+          tracking_id,
+          customer_user_id: context.profile.id,
+          branch_id: payload.branch_id,
+          sender_name: sanitizeText(payload.sender_name),
+          sender_phone: sanitizeText(payload.sender_phone),
+          receiver_name: sanitizeText(payload.receiver_name),
+          receiver_phone: sanitizeText(payload.receiver_phone),
+          pickup_address: sanitizeText(payload.pickup_address),
+          pickup_lat: payload.pickup_lat,
+          pickup_lng: payload.pickup_lng,
+          drop_address: sanitizeText(payload.drop_address),
+          drop_lat: payload.drop_lat,
+          drop_lng: payload.drop_lng,
+          vehicle_type: payload.vehicle_type,
+          parcel_weight_kg: payload.parcel_weight_kg ?? null,
+          parcel_notes: sanitizeText(payload.parcel_notes ?? ""),
+          cod_required: payload.cod_required,
+          cod_amount: payload.cod_amount ?? null,
+          status: "booked",
+          estimated_arrival_at,
+        })
+        .select("*")
+        .single();
+
+      created = result.data;
+      createError = result.error;
+
+      const duplicateId =
+        createError?.code === "23505" ||
+        String(createError?.message ?? "").toLowerCase().includes("duplicate");
+
+      if (!duplicateId) {
+        break;
+      }
+    }
 
     if (createError || !created) {
       json(res, 400, { error: createError?.message ?? "Unable to create booking" });
@@ -638,6 +906,378 @@ async function handleTracking(req: IncomingMessage, res: ServerResponse, segment
   });
 }
 
+async function handleCustomerEndpoints(req: IncomingMessage, res: ServerResponse, segments: string[], context: AuthContext) {
+  requireRole(context, ["customer"]);
+
+  if (req.method === "GET" && segments.length === 2 && segments[1] === "profile") {
+    const { count: ordersCount } = await supabaseAdmin
+      .from("bookings")
+      .select("id", { count: "exact", head: true })
+      .eq("customer_user_id", context.profile.id);
+
+    json(res, 200, {
+      data: {
+        user: context.profile,
+        loyaltyPoints: (ordersCount ?? 0) * 10,
+      },
+    });
+    return;
+  }
+
+  if (req.method === "GET" && segments.length === 2 && segments[1] === "orders") {
+    const { data, error } = await supabaseAdmin
+      .from("bookings")
+      .select("*, trips(*, drivers(*, users(*)), vehicles(*)), tracking_events(*)")
+      .eq("customer_user_id", context.profile.id)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      json(res, 400, { error: error.message });
+      return;
+    }
+
+    const mapped = (data ?? []).map((item: any) => ({
+      id: item.id,
+      orderNumber: item.tracking_id,
+      status: (item.status ?? "booked").toUpperCase(),
+      finalPrice: Number(item.cod_amount ?? 0),
+      createdAt: item.created_at,
+      pickupAddress: { fullAddress: item.pickup_address },
+      dropAddress: { fullAddress: item.drop_address },
+      trackingLogs: (item.tracking_events ?? []).map((evt: any) => ({
+        id: evt.id,
+        status: (evt.status ?? "booked").toUpperCase(),
+        createdAt: evt.event_time,
+        message: evt.message,
+      })),
+      rider: item.trips?.[0]?.drivers?.users
+        ? {
+            user: {
+              fullName: item.trips[0].drivers.users.full_name,
+              phoneNumber: item.trips[0].drivers.users.phone,
+            },
+            vehicle: {
+              vehicleNumber: item.trips?.[0]?.vehicles?.registration_number,
+            },
+          }
+        : null,
+    }));
+
+    json(res, 200, { data: mapped });
+    return;
+  }
+
+  if (req.method === "GET" && segments.length === 2 && segments[1] === "wallet") {
+    const { data, error } = await supabaseAdmin
+      .from("payments")
+      .select("id, amount, method, status, paid_at")
+      .eq("status", "captured")
+      .order("paid_at", { ascending: false })
+      .limit(25);
+
+    if (error) {
+      json(res, 400, { error: error.message });
+      return;
+    }
+
+    const transactions = (data ?? []).map((payment: any) => ({
+      id: payment.id,
+      amount: Number(payment.amount ?? 0),
+      type: "DEBIT",
+      createdAt: payment.paid_at,
+      description: payment.method ?? "Payment",
+    }));
+
+    json(res, 200, {
+      data: {
+        balance: 0,
+        transactions,
+      },
+    });
+    return;
+  }
+
+  if (req.method === "GET" && segments.length === 2 && segments[1] === "addresses") {
+    const { data, error } = await supabaseAdmin
+      .from("bookings")
+      .select("pickup_address, pickup_lat, pickup_lng, drop_address, drop_lat, drop_lng")
+      .eq("customer_user_id", context.profile.id)
+      .order("created_at", { ascending: false })
+      .limit(30);
+
+    if (error) {
+      json(res, 400, { error: error.message });
+      return;
+    }
+
+    const map = new Map<string, any>();
+    for (const row of data ?? []) {
+      if (row.pickup_address) {
+        map.set(`pickup:${row.pickup_address}`, {
+          id: `p-${Buffer.from(row.pickup_address).toString("base64").slice(0, 12)}`,
+          fullAddress: row.pickup_address,
+          latitude: Number(row.pickup_lat ?? 14.4426),
+          longitude: Number(row.pickup_lng ?? 79.9865),
+        });
+      }
+      if (row.drop_address) {
+        map.set(`drop:${row.drop_address}`, {
+          id: `d-${Buffer.from(row.drop_address).toString("base64").slice(0, 12)}`,
+          fullAddress: row.drop_address,
+          latitude: Number(row.drop_lat ?? 14.4426),
+          longitude: Number(row.drop_lng ?? 79.9865),
+        });
+      }
+    }
+
+    const addresses = Array.from(map.values());
+    if (addresses.length === 0) {
+      addresses.push(
+        { id: "default-pickup", fullAddress: "Podalakur Main Road, Nellore", latitude: 14.4426, longitude: 79.9865 },
+        { id: "default-drop", fullAddress: "Nellore Bus Stand, Nellore", latitude: 14.4472, longitude: 79.9860 }
+      );
+    }
+
+    json(res, 200, { data: addresses });
+    return;
+  }
+
+  json(res, 404, { error: "Customer endpoint not found" });
+}
+
+async function handleOrders(req: IncomingMessage, res: ServerResponse, segments: string[], context: AuthContext) {
+  requireRole(context, ["customer", "admin", "operations_staff"]);
+
+  if (req.method === "POST" && segments.length === 1) {
+    const parsed = customerOrderSchema.safeParse(await parseBody(req));
+    if (!parsed.success) {
+      json(res, 400, { error: "Invalid order payload", details: parsed.error.flatten() });
+      return;
+    }
+
+    const payload = parsed.data;
+    const { data: branch } = await supabaseAdmin.from("branches").select("id").limit(1).maybeSingle();
+    if (!branch?.id) {
+      json(res, 400, { error: "No branch configured" });
+      return;
+    }
+
+    const pickupAddress = sanitizeText(payload.pickupAddress ?? "Pickup Address");
+    const dropAddress = sanitizeText(payload.dropAddress ?? "Drop Address");
+    const pickupLat = Number(payload.pickupLat ?? 14.4426);
+    const pickupLng = Number(payload.pickupLng ?? 79.9865);
+    const dropLat = Number(payload.dropLat ?? 14.4472);
+    const dropLng = Number(payload.dropLng ?? 79.9860);
+
+    let created: any | null = null;
+    let createError: any = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const tracking_id = await generateTrackingId();
+      const result = await supabaseAdmin
+        .from("bookings")
+        .insert({
+          tracking_id,
+          customer_user_id: context.profile.id,
+          branch_id: branch.id,
+          sender_name: context.profile.full_name ?? "Customer",
+          sender_phone: context.profile.phone ?? "",
+          receiver_name: context.profile.full_name ?? "Receiver",
+          receiver_phone: context.profile.phone ?? "",
+          pickup_address: pickupAddress,
+          pickup_lat: pickupLat,
+          pickup_lng: pickupLng,
+          drop_address: dropAddress,
+          drop_lat: dropLat,
+          drop_lng: dropLng,
+          vehicle_type: String(payload.vehicleType ?? "bike").toLowerCase(),
+          parcel_weight_kg: payload.parcelWeight ?? null,
+          parcel_notes: sanitizeText(payload.parcelCategory ?? "General parcel"),
+          cod_required: false,
+          cod_amount: null,
+          status: "booked",
+          estimated_arrival_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        })
+        .select("*")
+        .single();
+
+      created = result.data;
+      createError = result.error;
+      const duplicateId =
+        createError?.code === "23505" ||
+        String(createError?.message ?? "").toLowerCase().includes("duplicate");
+      if (!duplicateId) break;
+    }
+
+    if (createError || !created) {
+      json(res, 400, { error: createError?.message ?? "Unable to create order" });
+      return;
+    }
+
+    await supabaseAdmin.from("tracking_events").insert({
+      booking_id: created.id,
+      status: "booked",
+      message: "Order created",
+      location_label: created.pickup_address,
+    });
+
+    json(res, 201, {
+      data: {
+        id: created.id,
+        orderNumber: created.tracking_id,
+      },
+    });
+    return;
+  }
+
+  if (req.method === "GET" && segments.length === 2) {
+    const orderId = sanitizeText(segments[1]);
+    const byId = /^[0-9a-fA-F-]{8,}$/.test(orderId);
+    const query = supabaseAdmin
+      .from("bookings")
+      .select("*, trips(*, drivers(*, users(*)), vehicles(*)), tracking_events(*)")
+      .eq("customer_user_id", context.profile.id)
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    const { data, error } = byId ? await query.eq("id", orderId).maybeSingle() : await query.eq("tracking_id", orderId).maybeSingle();
+
+    if (error) {
+      json(res, 400, { error: error.message });
+      return;
+    }
+    if (!data) {
+      json(res, 404, { error: "Order not found" });
+      return;
+    }
+
+    json(res, 200, {
+      data: {
+        id: data.id,
+        orderNumber: data.tracking_id,
+        status: (data.status ?? "booked").toUpperCase(),
+        finalPrice: Number(data.cod_amount ?? 0),
+        createdAt: data.created_at,
+        pickupAddress: { fullAddress: data.pickup_address },
+        dropAddress: { fullAddress: data.drop_address },
+        trackingLogs: (data.tracking_events ?? []).map((evt: any) => ({
+          id: evt.id,
+          status: (evt.status ?? "booked").toUpperCase(),
+          createdAt: evt.event_time,
+          message: evt.message,
+        })),
+        rider: data.trips?.[0]?.drivers?.users
+          ? {
+              user: {
+                fullName: data.trips[0].drivers.users.full_name,
+                phoneNumber: data.trips[0].drivers.users.phone,
+              },
+              vehicle: {
+                vehicleNumber: data.trips?.[0]?.vehicles?.registration_number,
+              },
+            }
+          : null,
+      },
+    });
+    return;
+  }
+
+  if (req.method === "GET" && segments.length === 4 && segments[1] === "public" && segments[3] === "track") {
+    const trackingId = sanitizeText(segments[2]);
+    const { data: booking, error } = await supabaseAdmin
+      .from("bookings")
+      .select("*, trips(*, drivers(*, users(*)), vehicles(*))")
+      .eq("tracking_id", trackingId)
+      .maybeSingle();
+
+    if (error) {
+      json(res, 400, { error: error.message });
+      return;
+    }
+    if (!booking) {
+      json(res, 404, { error: "Order not found" });
+      return;
+    }
+
+    const { data: timeline } = await supabaseAdmin
+      .from("tracking_events")
+      .select("*")
+      .eq("booking_id", booking.id)
+      .order("event_time", { ascending: true });
+
+    json(res, 200, {
+      data: {
+        orderNumber: booking.tracking_id,
+        status: (booking.status ?? "booked").toUpperCase(),
+        estimatedDeliveryTime: booking.estimated_arrival_at,
+        rider: booking.trips?.[0]?.drivers?.users
+          ? {
+              name: booking.trips[0].drivers.users.full_name,
+              phoneNumber: booking.trips[0].drivers.users.phone,
+            }
+          : null,
+        timeline: (timeline ?? []).map((evt: any) => ({
+          id: evt.id,
+          status: (evt.status ?? "booked").toUpperCase(),
+          timestamp: evt.event_time,
+          message: evt.message,
+        })),
+      },
+    });
+    return;
+  }
+
+  json(res, 405, { error: "Method not allowed" });
+}
+
+async function handlePublicOrderTrack(res: ServerResponse, segments: string[]) {
+  if (segments.length !== 4 || segments[1] !== "public" || segments[3] !== "track") {
+    json(res, 404, { error: "Endpoint not found" });
+    return;
+  }
+
+  const trackingId = sanitizeText(segments[2]);
+  const { data: booking, error } = await supabaseAdmin
+    .from("bookings")
+    .select("*, trips(*, drivers(*, users(*)), vehicles(*))")
+    .eq("tracking_id", trackingId)
+    .maybeSingle();
+
+  if (error) {
+    json(res, 400, { error: error.message });
+    return;
+  }
+  if (!booking) {
+    json(res, 404, { error: "Order not found" });
+    return;
+  }
+
+  const { data: timeline } = await supabaseAdmin
+    .from("tracking_events")
+    .select("*")
+    .eq("booking_id", booking.id)
+    .order("event_time", { ascending: true });
+
+  json(res, 200, {
+    data: {
+      orderNumber: booking.tracking_id,
+      status: (booking.status ?? "booked").toUpperCase(),
+      estimatedDeliveryTime: booking.estimated_arrival_at,
+      rider: booking.trips?.[0]?.drivers?.users
+        ? {
+            name: booking.trips[0].drivers.users.full_name,
+            phoneNumber: booking.trips[0].drivers.users.phone,
+          }
+        : null,
+      timeline: (timeline ?? []).map((evt: any) => ({
+        id: evt.id,
+        status: (evt.status ?? "booked").toUpperCase(),
+        timestamp: evt.event_time,
+        message: evt.message,
+      })),
+    },
+  });
+}
+
 async function handleAnalytics(res: ServerResponse, context: AuthContext) {
   requireRole(context, ["admin"]);
 
@@ -664,6 +1304,72 @@ async function handleAnalytics(res: ServerResponse, context: AuthContext) {
 
 async function handleRiderActions(req: IncomingMessage, res: ServerResponse, segments: string[], context: AuthContext) {
   requireRole(context, ["driver"]);
+
+  if (segments.length === 2 && segments[1] === "location" && req.method === "POST") {
+    const parsed = riderLocationSchema.safeParse(await parseBody(req));
+    if (!parsed.success) {
+      json(res, 400, { error: "Invalid rider location payload", details: parsed.error.flatten() });
+      return;
+    }
+
+    const payload = parsed.data;
+
+    const { data: driver, error: driverError } = await supabaseAdmin
+      .from("drivers")
+      .select("id")
+      .eq("user_id", context.profile.id)
+      .maybeSingle();
+
+    if (driverError || !driver) {
+      json(res, 400, { error: "Driver profile not found" });
+      return;
+    }
+
+    const { data: trip, error: tripError } = await supabaseAdmin
+      .from("trips")
+      .select("id, booking_id, driver_id, status")
+      .eq("id", payload.trip_id)
+      .maybeSingle();
+
+    if (tripError || !trip) {
+      json(res, 404, { error: "Trip not found" });
+      return;
+    }
+
+    if (trip.driver_id !== driver.id) {
+      json(res, 403, { error: "Trip is not assigned to this rider" });
+      return;
+    }
+
+    const { error: updateDriverError } = await supabaseAdmin
+      .from("drivers")
+      .update({
+        current_lat: payload.latitude,
+        current_lng: payload.longitude,
+        status: "online",
+      })
+      .eq("id", driver.id);
+
+    if (updateDriverError) {
+      json(res, 400, { error: updateDriverError.message });
+      return;
+    }
+
+    const trackableStatuses = ["assigned", "accepted", "started", "pickup_complete", "in_transit"];
+    if (trackableStatuses.includes(String(trip.status ?? "").toLowerCase())) {
+      await supabaseAdmin.from("tracking_events").insert({
+        booking_id: trip.booking_id,
+        status: trip.status,
+        message: "Rider location updated",
+        latitude: payload.latitude,
+        longitude: payload.longitude,
+        location_label: "Live location",
+      });
+    }
+
+    json(res, 200, { ok: true });
+    return;
+  }
 
   if (segments.length === 2 && segments[1] === "trips" && req.method === "GET") {
     const { data: driver, error: driverError } = await supabaseAdmin
@@ -776,7 +1482,7 @@ async function handleRiderActions(req: IncomingMessage, res: ServerResponse, seg
 }
 
 export default async function handler(req: IncomingMessage, res: ServerResponse) {
-  setCorsHeaders(res);
+  setCorsHeaders(req, res);
 
   if (req.method === "OPTIONS") {
     res.statusCode = 204;
@@ -837,6 +1543,22 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         await handleRiderPasswordLogin(req, res);
         return;
       }
+      if (method === "POST" && action === "customer-request-otp") {
+        await handleCustomerRequestOtp(req, res);
+        return;
+      }
+      if (method === "POST" && action === "customer-verify-otp") {
+        await handleCustomerVerifyOtp(req, res);
+        return;
+      }
+      if (method === "POST" && action === "customer-password-login") {
+        await handleCustomerPasswordLogin(req, res);
+        return;
+      }
+      if (method === "POST" && action === "customer-register") {
+        await handleCustomerRegister(req, res);
+        return;
+      }
       if (method === "POST" && action === "logout") {
         const context = await requireAuth(req);
         await handleAuthLogout(res, context);
@@ -857,6 +1579,11 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
       return;
     }
 
+    if (resource === "orders" && method === "GET" && pathSegments[1] === "public" && pathSegments[3] === "track") {
+      await handlePublicOrderTrack(res, pathSegments);
+      return;
+    }
+
     const context = await requireAuth(req);
 
     if (resource === "analytics" && method === "GET" && pathSegments[1] === "dashboard") {
@@ -866,6 +1593,16 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
 
     if (resource === "riders") {
       await handleRiderActions(req, res, pathSegments, context);
+      return;
+    }
+
+    if (resource === "customers") {
+      await handleCustomerEndpoints(req, res, pathSegments, context);
+      return;
+    }
+
+    if (resource === "orders") {
+      await handleOrders(req, res, pathSegments, context);
       return;
     }
 
@@ -887,6 +1624,9 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
       "complaints",
       "notifications",
       "audit_logs",
+      "inventory_items",
+      "vehicle_compliance",
+      "driver_attendance",
     ];
 
     if (!adminResources.includes(resource)) {

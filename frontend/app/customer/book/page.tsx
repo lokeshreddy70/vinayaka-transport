@@ -3,10 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { MapPin, Package, Truck, Clock } from 'lucide-react'
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
-const ACCESS_TOKEN_KEY = 'vinayaka_access_token'
-const REFRESH_TOKEN_KEY = 'vinayaka_refresh_token'
+import { ACCESS_TOKEN_KEY, REFRESH_TOKEN_KEY, API_URL } from '@/lib/customer-api'
 
 type Address = {
   id: string
@@ -36,7 +33,7 @@ export default function BookParcel() {
     const token = window.localStorage.getItem(ACCESS_TOKEN_KEY)
 
     if (!token) {
-      router.replace('/login')
+      router.replace('/customer/login')
       return
     }
 
@@ -60,7 +57,7 @@ export default function BookParcel() {
       .catch(() => {
         window.localStorage.removeItem(ACCESS_TOKEN_KEY)
         window.localStorage.removeItem(REFRESH_TOKEN_KEY)
-        router.replace('/login')
+        router.replace('/customer/login')
       })
   }, [router])
 
@@ -71,7 +68,7 @@ export default function BookParcel() {
   const submitOrder = async () => {
     const token = window.localStorage.getItem(ACCESS_TOKEN_KEY)
     if (!token) {
-      router.replace('/login')
+      router.replace('/customer/login')
       return
     }
 
@@ -96,6 +93,8 @@ export default function BookParcel() {
         body: JSON.stringify({
           pickupAddressId,
           dropAddressId,
+          pickupAddress: pickup.fullAddress,
+          dropAddress: drop.fullAddress,
           pickupLat: pickup.latitude,
           pickupLng: pickup.longitude,
           dropLat: drop.latitude,
@@ -283,11 +282,11 @@ export default function BookParcel() {
               <div>
                 <label className="block text-white font-semibold mb-2">⏰ Delivery Type</label>
                 <select aria-label="Delivery type" className="input-field" value={formData.deliveryType} onChange={(e) => setFormData({ ...formData, deliveryType: e.target.value })}>
-                  <option>STANDARD - 2-3 hours</option>
-                  <option>EXPRESS - 45-60 minutes</option>
-                  <option>PRIORITY - 30 minutes</option>
-                  <option>EMERGENCY - 15 minutes</option>
-                  <option>SCHEDULED - Schedule later</option>
+                  <option value="STANDARD">STANDARD - 2-3 hours</option>
+                  <option value="EXPRESS">EXPRESS - 45-60 minutes</option>
+                  <option value="PRIORITY">PRIORITY - 30 minutes</option>
+                  <option value="EMERGENCY">EMERGENCY - 15 minutes</option>
+                  <option value="SCHEDULED">SCHEDULED - Schedule later</option>
                 </select>
               </div>
             </div>
@@ -362,3 +361,5 @@ export default function BookParcel() {
     </div>
   )
 }
+
+

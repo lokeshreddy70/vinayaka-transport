@@ -3,9 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "node --watch dist/api/[...all].js",
+    "dev": "npm run build && node dist/src/dev-server.js",
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/api/[...all].js",
+    "start": "node dist/src/dev-server.js",
     "lint": "echo lint-api",
     "test": "echo test-api",
     "format": "echo format-api",

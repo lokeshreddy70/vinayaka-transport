@@ -61,8 +61,11 @@ export class OrderService {
 
     const totalPrice = baseFare + distanceFare + weightFare + peakHourCharge + nightCharge + urgencyCharge;
 
+    const orderNumber = await this.generateOrderNumber();
+
     const order = await prisma.order.create({
       data: {
+        orderNumber,
         customerId: input.customerId,
         pickupAddressId: input.pickupAddressId,
         dropAddressId: input.dropAddressId,
@@ -347,6 +350,28 @@ export class OrderService {
     const hour = new Date().getHours();
     if (hour >= 22 || hour <= 6) return rule.baseFare * 0.3;
     return 0;
+  }
+
+  private async generateOrderNumber(): Promise<string> {
+    const year = new Date().getFullYear();
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const serial = Math.floor(Math.random() * 1_000_000)
+        .toString()
+        .padStart(6, '0');
+      const orderNumber = `VT-${year}-${serial}`;
+
+      const exists = await prisma.order.findUnique({
+        where: { orderNumber },
+        select: { id: true },
+      });
+
+      if (!exists) {
+        return orderNumber;
+      }
+    }
+
+    throw new ValidationError('Unable to generate a unique order number. Please retry.');
   }
 }
 

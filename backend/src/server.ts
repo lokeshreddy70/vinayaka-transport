@@ -1,3 +1,7 @@
+// Load environment variables first!
+import dotenv from 'dotenv';
+dotenv.config();
+
 import express, { Express, Request, Response } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -11,6 +15,8 @@ import { apiLimiter } from './middleware/rateLimiter';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { sendSuccess } from './utils/response';
 import { setSocketServer } from './realtime/socket';
+import { EnvironmentValidator } from './utils/envValidator';
+import { HealthChecker } from './utils/healthChecker';
 
 // Routes
 import authRoutes from './routes/auth';
@@ -23,7 +29,12 @@ const httpServer = createServer(app);
 
 // Middleware
 app.use(helmet());
-app.use(cors());
+app.use(
+  cors({
+    origin: config.cors.origin === '*' ? true : config.cors.origin,
+    credentials: true,
+  })
+);
 app.use(express.json());
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(apiLimiter);
@@ -33,11 +44,22 @@ app.get('/health', (req: Request, res: Response) => {
   sendSuccess(res, 200, 'Server is running', { timestamp: new Date() });
 });
 
+// Health check endpoint with diagnostics
+app.get('/health/detailed', async (req: Request, res: Response) => {
+  const results = await HealthChecker.runAll();
+  const allHealthy = results.every((r) => r.status === 'healthy');
+  sendSuccess(res, allHealthy ? 200 : 503, 'Health check completed', { checks: results });
+});
+
 // API Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/customers', customerRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/riders', riderRoutes);
+app.use('/api/v1/auth', authRoutes);
+app.use('/api/v1/customers', customerRoutes);
+app.use('/api/v1/orders', orderRoutes);
+app.use('/api/v1/riders', riderRoutes);
 
 const io = new SocketIOServer(httpServer, {
   cors: {
@@ -72,10 +94,37 @@ app.use(notFoundHandler);
 app.use(errorHandler);
 
 // Start Server
-const PORT = config.server.port;
-httpServer.listen(PORT, () => {
-  logger.info(`🚀 Vinayaka Transport Backend running on port ${PORT}`);
-  logger.info(`Environment: ${config.server.nodeEnv}`);
-});
+async function startServer() {
+  try {
+    // Validate environment on startup
+    EnvironmentValidator.validateOrThrow();
+    EnvironmentValidator.logConfiguration();
+
+    // Run health checks
+    const healthResults = await HealthChecker.runAll();
+    logger.info(HealthChecker.getReport(healthResults));
+
+    const PORT = config.server.port;
+    httpServer.listen(PORT, () => {
+      logger.info(`🚀 Vinayaka Transport Backend running on port ${PORT}`);
+      logger.info(`Environment: ${config.server.nodeEnv}`);
+      logger.info(`API endpoints available at:`);
+      logger.info(`  - /api/auth`);
+      logger.info(`  - /api/customers`);
+      logger.info(`  - /api/orders`);
+      logger.info(`  - /api/riders`);
+      logger.info(`  - /api/v1/* (versioned endpoints)`);
+      logger.info(`Health check: GET /health`);
+    });
+  } catch (error) {
+    logger.error({ error }, 'Failed to start server');
+    if (error instanceof Error) {
+      logger.error(error.message);
+    }
+    process.exit(1);
+  }
+}
+
+startServer();
 
 export default app;

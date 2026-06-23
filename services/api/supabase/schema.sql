@@ -164,6 +164,45 @@ create table if not exists complaints (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists inventory_items (
+  id uuid primary key default gen_random_uuid(),
+  branch_id uuid not null references branches(id) on delete cascade,
+  item_name text not null,
+  category text not null,
+  quantity integer not null default 0,
+  unit text not null default 'pcs',
+  low_stock_threshold integer not null default 5,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists vehicle_compliance (
+  id uuid primary key default gen_random_uuid(),
+  branch_id uuid not null references branches(id) on delete cascade,
+  vehicle_id uuid references vehicles(id) on delete set null,
+  insurance_expiry date,
+  fc_expiry date,
+  pollution_expiry date,
+  service_due_date date,
+  maintenance_notes text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists driver_attendance (
+  id uuid primary key default gen_random_uuid(),
+  branch_id uuid not null references branches(id) on delete cascade,
+  driver_id uuid references drivers(id) on delete set null,
+  attendance_date date not null,
+  status text not null default 'present',
+  check_in_at timestamptz,
+  check_out_at timestamptz,
+  notes text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (driver_id, attendance_date)
+);
+
 create table if not exists notifications (
   id uuid primary key default gen_random_uuid(),
   user_id uuid references users(id) on delete set null,
@@ -222,6 +261,15 @@ create trigger payments_updated_at before update on payments for each row execut
 drop trigger if exists complaints_updated_at on complaints;
 create trigger complaints_updated_at before update on complaints for each row execute function set_updated_at();
 
+drop trigger if exists inventory_items_updated_at on inventory_items;
+create trigger inventory_items_updated_at before update on inventory_items for each row execute function set_updated_at();
+
+drop trigger if exists vehicle_compliance_updated_at on vehicle_compliance;
+create trigger vehicle_compliance_updated_at before update on vehicle_compliance for each row execute function set_updated_at();
+
+drop trigger if exists driver_attendance_updated_at on driver_attendance;
+create trigger driver_attendance_updated_at before update on driver_attendance for each row execute function set_updated_at();
+
 alter table users enable row level security;
 alter table drivers enable row level security;
 alter table vehicles enable row level security;
@@ -235,6 +283,9 @@ alter table delivery_proofs enable row level security;
 alter table complaints enable row level security;
 alter table notifications enable row level security;
 alter table audit_logs enable row level security;
+alter table inventory_items enable row level security;
+alter table vehicle_compliance enable row level security;
+alter table driver_attendance enable row level security;
 
 create policy users_self_read on users
 for select

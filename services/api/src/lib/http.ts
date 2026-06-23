@@ -2,8 +2,29 @@ import type { IncomingMessage, ServerResponse } from "http";
 
 export type ApiRequest = IncomingMessage & { body?: unknown };
 
-export function setCorsHeaders(res: ServerResponse) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
+function getAllowedOrigins(): string[] {
+  const raw = process.env.CORS_ALLOWED_ORIGINS?.trim();
+  if (!raw) {
+    return ["*"];
+  }
+
+  return raw
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+}
+
+export function setCorsHeaders(req: IncomingMessage, res: ServerResponse) {
+  const requestOrigin = typeof req.headers.origin === "string" ? req.headers.origin : "";
+  const allowedOrigins = getAllowedOrigins();
+
+  if (allowedOrigins.includes("*")) {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+  } else if (requestOrigin && allowedOrigins.includes(requestOrigin)) {
+    res.setHeader("Access-Control-Allow-Origin", requestOrigin);
+    res.setHeader("Vary", "Origin");
+  }
+
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,PUT,DELETE,OPTIONS");
 }

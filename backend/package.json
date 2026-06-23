@@ -9,9 +9,12 @@
     "vercel-build": "prisma generate && tsc",
     "start": "node dist/server.js",
     "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma migrate dev",
+    "prisma:migrate": "prisma migrate deploy",
+    "prisma:migrate:dev": "prisma migrate dev --name",
     "prisma:seed": "tsx prisma/seed.ts",
     "prisma:studio": "prisma studio",
+    "db:reset": "prisma migrate reset --force",
+    "db:push": "prisma db push",
     "lint": "eslint src",
     "test": "jest"
   },

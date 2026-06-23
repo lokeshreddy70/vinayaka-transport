@@ -1,11 +1,28 @@
 import prisma from '../config/database';
-import { generateOTP, getOTPExpiry } from '../utils/auth';
+import {
+  createOtpChallengeToken,
+  generateOTP,
+  getOTPExpiry,
+  normalizePhoneNumber,
+  verifyOtpChallengeToken,
+} from '../utils/auth';
 import { generateAccessToken, generateRefreshToken, verifyRefreshToken } from '../config/jwt';
-import { ConflictError, NotFoundError, ValidationError } from '../utils/errors';
+import { NotFoundError, ValidationError } from '../utils/errors';
 import logger from '../config/logger';
 import { comparePassword, hashPassword } from '../utils/auth';
+import { otpChallengeStore } from './otpChallengeStore';
+import { smsService } from './smsService';
+import config from '../config';
 
 export class AuthService {
+  private normalizePhone(value: string): string {
+    try {
+      return normalizePhoneNumber(value);
+    } catch {
+      throw new ValidationError('Invalid phone number format');
+    }
+  }
+
   async setPassword(userId: string, password: string): Promise<void> {
     if (password.length < 8) {
       throw new ValidationError('Password must be at least 8 characters long');
@@ -26,7 +43,8 @@ export class AuthService {
     deviceInfo: string,
     role?: string
   ): Promise<{ user: any; accessToken: string; refreshToken: string }> {
-    const user = await prisma.user.findUnique({ where: { phoneNumber } });
+    const normalizedPhoneNumber = this.normalizePhone(phoneNumber);
+    const user = await prisma.user.findUnique({ where: { phoneNumber: normalizedPhoneNumber } });
 
     if (!user || user.isBlocked) {
       throw new ValidationError('Invalid credentials');
@@ -118,22 +136,21 @@ export class AuthService {
     };
   }
 
-  async sendOTP(phoneNumber: string): Promise<{ otp: string; expiresAt: Date }> {
-    const otp = generateOTP(6);
-    const expiresAt = getOTPExpiry(10); // 10 minutes
-
-    // In production, send via Twilio
-    logger.info(`OTP for ${phoneNumber}: ${otp}`);
+  async sendOTP(phoneNumber: string): Promise<{ otp: string; expiresAt: Date; challengeToken: string }> {
+    const normalizedPhoneNumber = this.normalizePhone(phoneNumber);
+    const otp = generateOTP(config.otp.length);
+    const { expiresAt } = otpChallengeStore.issue(normalizedPhoneNumber, otp);
+    const challengeToken = createOtpChallengeToken(normalizedPhoneNumber, otp, config.otp.expiry);
 
     // Check if user exists
-    let user = await prisma.user.findUnique({
-      where: { phoneNumber },
+    const user = await prisma.user.findUnique({
+      where: { phoneNumber: normalizedPhoneNumber },
     });
 
     if (user) {
       // Update existing user's OTP
       await prisma.user.update({
-        where: { phoneNumber },
+        where: { phoneNumber: normalizedPhoneNumber },
         data: {
           otpToken: otp,
           otpExpiresAt: expiresAt,
@@ -141,7 +158,10 @@ export class AuthService {
       });
     }
 
-    return { otp, expiresAt };
+    await smsService.sendOtp(normalizedPhoneNumber, otp);
+    logger.info({ phoneNumber: normalizedPhoneNumber }, 'OTP generated and delivery attempted');
+
+    return { otp, expiresAt, challengeToken };
   }
 
   async verifyOTPAndRegister(
@@ -149,18 +169,23 @@ export class AuthService {
     otp: string,
     fullName: string,
     deviceId: string,
-    deviceInfo: string
+    deviceInfo: string,
+    challengeToken?: string
   ): Promise<{ user: any; accessToken: string; refreshToken: string }> {
+    const normalizedPhoneNumber = this.normalizePhone(phoneNumber);
+
+    await this.verifyOTP(normalizedPhoneNumber, otp, challengeToken);
+
     // Find user
     const user = await prisma.user.findUnique({
-      where: { phoneNumber },
+      where: { phoneNumber: normalizedPhoneNumber },
     });
 
     if (!user) {
       // Create new user
       const newUser = await prisma.user.create({
         data: {
-          phoneNumber,
+          phoneNumber: normalizedPhoneNumber,
           fullName,
           role: 'CUSTOMER',
           isVerified: true,
@@ -187,7 +212,7 @@ export class AuthService {
 
       const accessToken = generateAccessToken({
         userId: newUser.id,
-        phoneNumber: newUser.phoneNumber,
+        phoneNumber: normalizedPhoneNumber,
         role: newUser.role,
         deviceId,
       });
@@ -211,18 +236,20 @@ export class AuthService {
       return { user: newUser, accessToken, refreshToken };
     }
 
-    // Verify OTP
-    if (user.otpToken !== otp || !user.otpExpiresAt || new Date() > user.otpExpiresAt) {
-      throw new ValidationError('Invalid or expired OTP');
-    }
-
     // Create device session
-    await prisma.deviceSession.create({
-      data: {
+    await prisma.deviceSession.upsert({
+      where: { deviceId },
+      create: {
         userId: user.id,
         deviceId,
         deviceName: deviceInfo,
         deviceOS: 'unknown',
+      },
+      update: {
+        userId: user.id,
+        deviceName: deviceInfo,
+        lastActivityAt: new Date(),
+        isActive: true,
       },
     });
 
@@ -254,15 +281,46 @@ export class AuthService {
     return { user, accessToken, refreshToken };
   }
 
-  async verifyOTP(phoneNumber: string, otp: string): Promise<boolean> {
-    const user = await prisma.user.findUnique({
-      where: { phoneNumber },
-    });
+  async verifyOTP(phoneNumber: string, otp: string, challengeToken?: string): Promise<boolean> {
+    const normalizedPhoneNumber = this.normalizePhone(phoneNumber);
 
-    if (!user) {
-      throw new NotFoundError('User not found');
+    // First try challenge token verification (for new users)
+    if (challengeToken) {
+      const isValidChallenge = verifyOtpChallengeToken(challengeToken, normalizedPhoneNumber, otp);
+      if (isValidChallenge) {
+        otpChallengeStore.clear(normalizedPhoneNumber);
+        return true;
+      }
     }
 
+    // Then try in-memory store (for users who just requested OTP)
+    try {
+      otpChallengeStore.verify(normalizedPhoneNumber, otp);
+      return true;
+    } catch (error) {
+      if (!(error instanceof ValidationError)) {
+        throw error;
+      }
+
+      if (error.message !== 'OTP challenge not found. Request a new OTP') {
+        throw error;
+      }
+    }
+
+    // Finally check database (for users logging in)
+    const user = await prisma.user.findUnique({
+      where: { phoneNumber: normalizedPhoneNumber },
+    });
+
+    // If user doesn't exist, this is a new user registration
+    // Check if the OTP is valid in the in-memory challenge store or challenge token
+    if (!user) {
+      // At this point, we've already checked challenge token and memory store
+      // If we get here, OTP is invalid for a new user
+      throw new ValidationError('Invalid or expired OTP');
+    }
+
+    // For existing users, check database OTP
     if (user.otpToken !== otp || !user.otpExpiresAt || new Date() > user.otpExpiresAt) {
       throw new ValidationError('Invalid or expired OTP');
     }
@@ -275,8 +333,9 @@ export class AuthService {
     deviceId: string,
     deviceInfo: string
   ): Promise<{ user: any; accessToken: string; refreshToken: string }> {
+    const normalizedPhoneNumber = this.normalizePhone(phoneNumber);
     const user = await prisma.user.findUnique({
-      where: { phoneNumber },
+      where: { phoneNumber: normalizedPhoneNumber },
     });
 
     if (!user || user.isBlocked) {

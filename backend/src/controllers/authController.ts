@@ -65,7 +65,8 @@ export class AuthController {
 
       const result = await authService.sendOTP(phoneNumber);
       sendSuccess(res, 200, 'OTP sent successfully', {
-        expiresIn: '10 minutes',
+        expiresIn: `${Math.max(1, Number(process.env.OTP_EXPIRY || 10))} minutes`,
+        challengeToken: result.challengeToken,
         ...(process.env.NODE_ENV !== 'production' ? { otp: result.otp } : {}),
       });
     } catch (error) {
@@ -75,7 +76,7 @@ export class AuthController {
 
   async verifyOTPAndRegister(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const { phoneNumber, otp, fullName, deviceId, deviceInfo } = req.body;
+      const { phoneNumber, otp, fullName, deviceId, deviceInfo, challengeToken } = req.body;
 
       if (!phoneNumber || !otp || !fullName || !deviceId) {
         throw new ValidationError('Missing required fields');
@@ -86,7 +87,8 @@ export class AuthController {
         otp,
         fullName,
         deviceId,
-        deviceInfo || 'unknown'
+        deviceInfo || 'unknown',
+        challengeToken
       );
 
       sendSuccess(res, 201, 'User registered successfully', {
@@ -106,14 +108,14 @@ export class AuthController {
 
   async login(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const { phoneNumber, otp, deviceId, deviceInfo } = req.body;
+      const { phoneNumber, otp, deviceId, deviceInfo, challengeToken } = req.body;
 
       if (!phoneNumber || !otp || !deviceId) {
         throw new ValidationError('Missing required fields');
       }
 
       // Verify OTP
-      await authService.verifyOTP(phoneNumber, otp);
+      await authService.verifyOTP(phoneNumber, otp, challengeToken);
 
       // Login
       const result = await authService.login(phoneNumber, deviceId, deviceInfo || 'unknown');

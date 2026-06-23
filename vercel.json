@@ -1,4 +1,21 @@
 {
   "buildCommand": "npm run build --workspaces --if-present",
-  "installCommand": "npm install"
+  "installCommand": "npm install",
+  "experimentalServices": {
+    "frontend": {
+      "root": "frontend",
+      "framework": "nextjs",
+      "routePrefix": "/"
+    },
+    "backend": {
+      "root": "backend",
+      "entrypoint": "dist/server.js",
+      "routePrefix": "/_/backend"
+    },
+    "realtime": {
+      "root": "services/realtime",
+      "entrypoint": "src/index.ts",
+      "routePrefix": "/_/realtime"
+    }
+  }
 }
