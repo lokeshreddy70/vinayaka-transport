@@ -27,16 +27,41 @@ import riderRoutes from './routes/riders';
 const app: Express = express();
 const httpServer = createServer(app);
 
+const resolveAllowedOrigins = (rawOrigins: string[]): string[] => {
+  if (!rawOrigins.length) {
+    return ['*'];
+  }
+
+  return rawOrigins;
+};
+
+const allowedOrigins = resolveAllowedOrigins(config.cors.origins);
+const allowAllOrigins = allowedOrigins.includes('*');
+const socketAllowedOrigins = resolveAllowedOrigins(config.socket.origins);
+const allowAllSocketOrigins = socketAllowedOrigins.includes('*');
+
 // Middleware
-app.use(helmet());
+app.use(
+  helmet({
+    contentSecurityPolicy: false,
+    crossOriginEmbedderPolicy: false,
+  })
+);
 app.use(
   cors({
-    origin: config.cors.origin === '*' ? true : config.cors.origin,
+    origin: (origin, callback) => {
+      if (!origin || allowAllOrigins || allowedOrigins.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+
+      callback(new Error('Origin not allowed by CORS'));
+    },
     credentials: true,
   })
 );
-app.use(express.json());
-app.use(express.urlencoded({ limit: '50mb', extended: true }));
+app.use(express.json({ limit: config.body.jsonLimit }));
+app.use(express.urlencoded({ limit: config.body.urlEncodedLimit, extended: true }));
 app.use(apiLimiter);
 
 // Health check
@@ -63,7 +88,14 @@ app.use('/api/v1/riders', riderRoutes);
 
 const io = new SocketIOServer(httpServer, {
   cors: {
-    origin: '*',
+    origin: (origin, callback) => {
+      if (!origin || allowAllSocketOrigins || socketAllowedOrigins.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+
+      callback(new Error('Socket origin not allowed'));
+    },
     methods: ['GET', 'POST'],
   },
   transports: ['websocket', 'polling'],

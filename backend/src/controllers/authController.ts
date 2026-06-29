@@ -150,14 +150,18 @@ export class AuthController {
 
   async refreshToken(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
     try {
-      const { refreshToken } = req.body;
+      const refreshToken = req.body?.refreshToken || req.body?.refresh_token;
 
       if (!refreshToken) {
         throw new ValidationError('Missing required fields');
       }
 
       const result = await authService.refreshToken(refreshToken);
-      sendSuccess(res, 200, 'Token refreshed successfully', result);
+      sendSuccess(res, 200, 'Token refreshed successfully', {
+        ...result,
+        access_token: result.accessToken,
+        refresh_token: result.refreshToken,
+      });
     } catch (error) {
       next(error);
     }

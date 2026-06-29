@@ -16,7 +16,7 @@ export function CustomerBottomNav() {
   const pathname = usePathname()
 
   return (
-    <nav className="fixed inset-x-0 bottom-0 z-50 border-t border-slate-200 bg-white/95 backdrop-blur md:hidden">
+    <nav className="fixed inset-x-0 bottom-0 z-50 border-t border-[#E5E7EB] bg-white/95 backdrop-blur md:hidden">
       <div className="mx-auto grid max-w-2xl grid-cols-5">
         {navItems.map((item) => {
           const active = pathname === item.href
@@ -24,9 +24,9 @@ export function CustomerBottomNav() {
             <Link
               key={item.href}
               href={item.href}
-              className={`flex flex-col items-center gap-1 px-2 py-2 text-xs font-semibold transition ${active ? 'text-[#0A2540]' : 'text-slate-500'}`}
+              className={`flex flex-col items-center gap-1 px-2 py-2 text-xs font-semibold transition ${active ? 'text-[#111827]' : 'text-[#6B7280]'}`}
             >
-              <item.icon className={`h-5 w-5 ${active ? 'text-[#FF6B00]' : 'text-slate-400'}`} />
+              <item.icon className={`h-5 w-5 ${active ? 'text-[#2563EB]' : 'text-[#94A3B8]'}`} />
               <span>{item.label}</span>
             </Link>
           )

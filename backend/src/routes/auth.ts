@@ -14,5 +14,6 @@ router.get('/me', authenticate, (req, res, next) => authController.me(req as any
 router.post('/set-password', authenticate, (req, res, next) => authController.setPassword(req as any, res, next));
 router.post('/logout', authenticate, (req, res, next) => authController.logout(req as any, res, next));
 router.post('/refresh-token', (req, res, next) => authController.refreshToken(req as any, res, next));
+router.post('/refresh', (req, res, next) => authController.refreshToken(req as any, res, next));
 
 export default router;

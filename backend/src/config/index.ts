@@ -42,6 +42,14 @@ interface Config {
   };
   cors: {
     origin: string;
+    origins: string[];
+  };
+  socket: {
+    origins: string[];
+  };
+  body: {
+    jsonLimit: string;
+    urlEncodedLimit: string;
   };
 }
 
@@ -160,6 +168,20 @@ const config: Config = {
   },
   cors: {
     origin: process.env.CORS_ORIGIN || '*',
+    origins: (process.env.CORS_ORIGIN || '*')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean),
+  },
+  socket: {
+    origins: (process.env.SOCKET_CORS_ORIGIN || process.env.CORS_ORIGIN || '*')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean),
+  },
+  body: {
+    jsonLimit: process.env.BODY_JSON_LIMIT || '1mb',
+    urlEncodedLimit: process.env.BODY_URLENCODED_LIMIT || '1mb',
   },
 };
 

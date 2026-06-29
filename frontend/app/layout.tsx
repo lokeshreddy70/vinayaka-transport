@@ -1,4 +1,7 @@
 import '@/styles/globals.css'
+import { Inter } from 'next/font/google'
+
+const inter = Inter({ subsets: ['latin'], variable: '--font-inter', display: 'swap' })
 
 export const metadata = {
   title: 'Vinayaka Transport - Move Anything. Anywhere. Anytime.',
@@ -12,7 +15,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="dark:bg-slate-950 dark:text-white">
+      <body className={`${inter.variable} min-h-screen bg-[#F8FAFC] text-[#111827]`}>
         {children}
       </body>
     </html>

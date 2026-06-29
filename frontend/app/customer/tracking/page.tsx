@@ -60,22 +60,22 @@ export default function CustomerTrackingPage() {
   return (
     <main className="min-h-screen bg-[#F8FAFC] pb-24">
       <div className="mx-auto w-full max-w-5xl px-4 py-6 md:px-8 md:py-8">
-        <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-[0_20px_50px_-35px_rgba(10,37,64,0.35)] md:p-6">
-          <h1 className="text-3xl font-bold text-[#0A2540]">Live Tracking</h1>
-          <p className="mt-1 text-sm text-slate-600">Track by order ID in VT-YYYY-XXXXXX format.</p>
+        <section className="rounded-[28px] border border-[#E5E7EB] bg-white p-5 shadow-[0_24px_50px_-36px_rgba(15,23,42,0.35)] md:p-6">
+          <h1 className="text-3xl font-bold text-[#111827]">Live Tracking</h1>
+          <p className="mt-1 text-sm text-[#6B7280]">Track by order ID in VT-YYYY-XXXXXX format.</p>
 
           <div className="mt-4 grid gap-3 md:grid-cols-[1fr_auto]">
-            <label className="flex items-center gap-2 rounded-2xl border border-slate-300 bg-slate-50 px-3 py-2">
-              <Search className="h-4 w-4 text-slate-500" />
-              <input value={orderNumber} onChange={(event) => setOrderNumber(event.target.value)} placeholder="VT-2026-000001" className="w-full border-none bg-transparent text-sm focus:outline-none" />
+            <label className="flex items-center gap-2 rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] px-3 py-2">
+              <Search className="h-4 w-4 text-[#64748B]" />
+              <input value={orderNumber} onChange={(event) => setOrderNumber(event.target.value)} placeholder="VT-2026-000001" className="w-full border-none bg-transparent text-sm text-[#0F172A] focus:outline-none" />
             </label>
-            <button onClick={() => onTrack(orderNumber)} className="rounded-2xl bg-[#0A2540] px-4 py-2 text-sm font-semibold text-white">{loading ? 'Tracking...' : 'Track Shipment'}</button>
+            <button onClick={() => onTrack(orderNumber)} className="rounded-2xl bg-[#2563EB] px-4 py-2 text-sm font-semibold text-white">{loading ? 'Tracking...' : 'Track Shipment'}</button>
           </div>
 
           {activeOrders.length > 0 ? (
             <div className="mt-4 grid gap-2 md:grid-cols-2">
               {activeOrders.slice(0, 4).map((order) => (
-                <button key={order.id} onClick={() => { setOrderNumber(order.orderNumber); void onTrack(order.orderNumber) }} className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-left text-sm font-semibold text-slate-700">
+                <button key={order.id} onClick={() => { setOrderNumber(order.orderNumber); void onTrack(order.orderNumber) }} className="rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] px-3 py-2 text-left text-sm font-semibold text-[#334155]">
                   {order.orderNumber}
                 </button>
               ))}
@@ -84,21 +84,21 @@ export default function CustomerTrackingPage() {
 
           {result ? (
             <div className="mt-5 grid gap-4">
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Order</p>
-                <p className="text-lg font-bold text-[#0A2540]">{result.orderNumber}</p>
-                <p className="mt-1 text-sm text-slate-700">Status: {result.status}</p>
-                <p className="text-sm text-slate-700">ETA: {result.estimatedDeliveryTime ? new Date(result.estimatedDeliveryTime).toLocaleString() : 'Updating...'}</p>
+              <div className="rounded-2xl border border-[#DBEAFE] bg-[#EFF6FF] p-4">
+                <p className="text-xs uppercase tracking-[0.16em] text-[#64748B]">Order</p>
+                <p className="text-lg font-bold text-[#111827]">{result.orderNumber}</p>
+                <p className="mt-1 text-sm text-[#334155]">Status: {result.status}</p>
+                <p className="text-sm text-[#334155]">ETA: {result.estimatedDeliveryTime ? new Date(result.estimatedDeliveryTime).toLocaleString() : 'Updating...'}</p>
               </div>
 
               <ul className="grid gap-3">
                 {(result.timeline || []).map((event, index) => (
-                  <li key={`${event.id || event.status}-${index}`} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <li key={`${event.id || event.status}-${index}`} className="rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] px-4 py-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <p className="text-sm font-semibold text-[#0A2540]">{event.status}</p>
-                      <p className="text-xs text-slate-500">{event.timestamp ? new Date(event.timestamp).toLocaleString() : 'Pending'}</p>
+                      <p className="text-sm font-semibold text-[#111827]">{event.status}</p>
+                      <p className="text-xs text-[#64748B]">{event.timestamp ? new Date(event.timestamp).toLocaleString() : 'Pending'}</p>
                     </div>
-                    <p className="mt-1 text-sm text-slate-700">{event.message || event.status}</p>
+                    <p className="mt-1 text-sm text-[#334155]">{event.message || event.status}</p>
                   </li>
                 ))}
               </ul>
