@@ -43,8 +43,76 @@ export function saveDemoOrder(order: Order) {
   setLocalJson(DEMO_ORDERS_KEY, [order, ...existing])
 }
 
+export function getDemoOrders(): Order[] {
+  return getLocalJson<Order[]>(DEMO_ORDERS_KEY, [])
+}
+
+export function updateDemoOrderStatus(orderId: string, status: string): Order[] {
+  const existing = getDemoOrders()
+  const updated = existing.map((item) =>
+    item.id === orderId
+      ? {
+          ...item,
+          status,
+          trackingLogs: [
+            {
+              id: `demo-track-${Date.now()}`,
+              status,
+              timestamp: new Date().toISOString(),
+            },
+            ...(item.trackingLogs || []),
+          ],
+        }
+      : item
+  )
+  setLocalJson(DEMO_ORDERS_KEY, updated)
+  return updated
+}
+
 export function saveDemoWallet(wallet: { balance: number; transactions: WalletTransaction[] }) {
   setLocalJson(DEMO_WALLET_KEY, wallet)
+}
+
+export function getDemoWallet(): { balance: number; transactions: WalletTransaction[] } {
+  return getLocalJson(DEMO_WALLET_KEY, {
+    balance: 1250,
+    transactions: [
+      {
+        id: 'demo-txn-1',
+        amount: 500,
+        type: 'CREDIT',
+        description: 'Added Money',
+        createdAt: new Date().toISOString(),
+      },
+    ],
+  })
+}
+
+export function addDemoWalletTransaction(
+  amount: number,
+  description: string,
+  type: 'CREDIT' | 'DEBIT'
+): { balance: number; transactions: WalletTransaction[] } {
+  const wallet = getDemoWallet()
+  const normalizedAmount = Math.abs(Number(amount || 0))
+  const signedAmount = type === 'DEBIT' ? -normalizedAmount : normalizedAmount
+
+  const next = {
+    balance: Math.max(0, wallet.balance + signedAmount),
+    transactions: [
+      {
+        id: `demo-txn-${Date.now()}`,
+        amount: signedAmount,
+        type,
+        description,
+        createdAt: new Date().toISOString(),
+      },
+      ...wallet.transactions,
+    ],
+  }
+
+  saveDemoWallet(next)
+  return next
 }
 
 export function isAuthError(error: unknown): boolean {
@@ -201,18 +269,7 @@ export async function fetchCustomerWallet(token: string): Promise<{ balance: num
       transactions: Array.isArray(wallet?.transactions) ? wallet.transactions : [],
     }
   } catch {
-    return getLocalJson(DEMO_WALLET_KEY, {
-      balance: 1250,
-      transactions: [
-        {
-          id: 'demo-txn-1',
-          amount: 500,
-          type: 'CREDIT',
-          description: 'Added Money',
-          createdAt: new Date().toISOString(),
-        },
-      ],
-    })
+    return getDemoWallet()
   }
 }
 

@@ -1,7 +1,7 @@
 import '@/styles/globals.css'
-import { Inter } from 'next/font/google'
+import { Plus_Jakarta_Sans } from 'next/font/google'
 
-const inter = Inter({ subsets: ['latin'], variable: '--font-inter', display: 'swap' })
+const plusJakarta = Plus_Jakarta_Sans({ subsets: ['latin'], variable: '--font-jakarta', display: 'swap' })
 
 export const metadata = {
   title: 'Vinayaka Transport - Move Anything. Anywhere. Anytime.',
@@ -15,7 +15,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className={`${inter.variable} min-h-screen bg-[#F8FAFC] text-[#111827]`}>
+      <body className={`${plusJakarta.variable} min-h-screen bg-[#F8FAFC] text-[#111827]`}>
         {children}
       </body>
     </html>

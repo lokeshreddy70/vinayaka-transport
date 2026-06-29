@@ -3,7 +3,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Clock, Loader2, MapPin, Package, Search, Truck } from 'lucide-react'
-import { ACCESS_TOKEN_KEY, API_URL, saveDemoOrder, type Order } from '@/lib/customer-api'
+import {
+  ACCESS_TOKEN_KEY,
+  API_URL,
+  addDemoWalletTransaction,
+  saveDemoOrder,
+  type Order,
+} from '@/lib/customer-api'
 
 type Address = {
   id: string
@@ -111,7 +117,12 @@ export default function BookParcelPage() {
     parcelWeight: '',
     vehicleType: 'BIKE',
     deliveryType: 'STANDARD',
+    paymentMethod: 'COD',
+    scheduleAt: '',
+    couponCode: '',
   })
+  const [couponMessage, setCouponMessage] = useState('')
+  const [discountAmount, setDiscountAmount] = useState(0)
 
   useEffect(() => {
     const token = window.localStorage.getItem(ACCESS_TOKEN_KEY)
@@ -168,6 +179,54 @@ export default function BookParcelPage() {
   const canProceedToConfirm = useMemo(() => {
     return !!pickupSearch.trim() && !!dropSearch.trim() && Number(formData.parcelWeight) > 0
   }, [pickupSearch, dropSearch, formData.parcelWeight])
+
+  const estimatedFare = useMemo(() => {
+    const weight = Number(formData.parcelWeight || 0)
+    const baseByVehicle: Record<string, number> = {
+      BIKE: 70,
+      AUTO: 110,
+      MINI_VAN: 180,
+      CAR_PREMIUM: 220,
+      TRUCK: 320,
+    }
+    const speedMultiplier: Record<string, number> = {
+      STANDARD: 1,
+      EXPRESS: 1.2,
+      PRIORITY: 1.35,
+      EMERGENCY: 1.6,
+      SCHEDULED: 1,
+    }
+
+    const base = baseByVehicle[formData.vehicleType] || 90
+    const speed = speedMultiplier[formData.deliveryType] || 1
+    return Math.max(60, Math.round((base + weight * 25) * speed))
+  }, [formData.parcelWeight, formData.vehicleType, formData.deliveryType])
+
+  const finalFare = Math.max(0, estimatedFare - discountAmount)
+
+  function applyCoupon() {
+    const normalized = formData.couponCode.trim().toUpperCase()
+    if (!normalized) {
+      setCouponMessage('Enter a coupon code')
+      return
+    }
+
+    const discounts: Record<string, number> = {
+      VINAYAKA20: Math.round(estimatedFare * 0.2),
+      PARCEL30: 30,
+      CASH10: 10,
+    }
+
+    const amount = discounts[normalized]
+    if (!amount) {
+      setDiscountAmount(0)
+      setCouponMessage('Invalid coupon code')
+      return
+    }
+
+    setDiscountAmount(amount)
+    setCouponMessage(`Coupon applied. Saved ${amount.toFixed(2)}`)
+  }
 
   function selectPickupSuggestion(place: PlaceSuggestion) {
     setPickupPlace(place)
@@ -345,7 +404,11 @@ export default function BookParcelPage() {
           parcelValue: 0,
           vehicleType: formData.vehicleType,
           deliveryType: formData.deliveryType,
-          paymentMethod: 'COD',
+          paymentMethod: formData.paymentMethod,
+          scheduledPickupAt: formData.deliveryType === 'SCHEDULED' ? formData.scheduleAt || undefined : undefined,
+          couponCode: formData.couponCode || undefined,
+          discountAmount,
+          finalPrice: finalFare,
           isFragile: formData.parcelCategory === 'FRAGILE_ITEMS',
         }),
       })
@@ -361,22 +424,37 @@ export default function BookParcelPage() {
           id: created.id,
           orderNumber: created.orderNumber,
           status: created.status,
-          finalPrice: Number(created.finalPrice || created.fareAmount || 0),
+          finalPrice: Number(created.finalPrice || created.fareAmount || finalFare || 0),
           createdAt: created.createdAt || new Date().toISOString(),
           trackingLogs: created.trackingLogs || [],
         } as Order)
       }
 
+      if (formData.paymentMethod === 'WALLET' && finalFare > 0) {
+        addDemoWalletTransaction(finalFare, 'Ride Payment', 'DEBIT')
+      }
+
       setMessage(`Order created: ${created?.orderNumber || created?.id}`)
       setStep(1)
-      setFormData((prev) => ({ ...prev, parcelWeight: '', parcelCategory: 'DOCUMENTS', deliveryType: 'STANDARD', vehicleType: 'BIKE' }))
+      setFormData((prev) => ({
+        ...prev,
+        parcelWeight: '',
+        parcelCategory: 'DOCUMENTS',
+        deliveryType: 'STANDARD',
+        vehicleType: 'BIKE',
+        paymentMethod: 'COD',
+        scheduleAt: '',
+        couponCode: '',
+      }))
+      setDiscountAmount(0)
+      setCouponMessage('')
     } catch {
       const demoOrderNumber = `VT-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}`
       const localOrder: Order = {
         id: `demo-order-${Date.now()}`,
         orderNumber: demoOrderNumber,
         status: 'PENDING',
-        finalPrice: Math.max(60, Number(formData.parcelWeight || 1) * 45),
+        finalPrice: finalFare,
         createdAt: new Date().toISOString(),
         trackingLogs: [
           {
@@ -387,9 +465,23 @@ export default function BookParcelPage() {
         ],
       }
       saveDemoOrder(localOrder)
+      if (formData.paymentMethod === 'WALLET' && finalFare > 0) {
+        addDemoWalletTransaction(finalFare, 'Ride Payment', 'DEBIT')
+      }
       setMessage(`Order created: ${demoOrderNumber}`)
       setStep(1)
-      setFormData((prev) => ({ ...prev, parcelWeight: '', parcelCategory: 'DOCUMENTS', deliveryType: 'STANDARD', vehicleType: 'BIKE' }))
+      setFormData((prev) => ({
+        ...prev,
+        parcelWeight: '',
+        parcelCategory: 'DOCUMENTS',
+        deliveryType: 'STANDARD',
+        vehicleType: 'BIKE',
+        paymentMethod: 'COD',
+        scheduleAt: '',
+        couponCode: '',
+      }))
+      setDiscountAmount(0)
+      setCouponMessage('')
     } finally {
       setSubmitting(false)
     }
@@ -501,16 +593,34 @@ export default function BookParcelPage() {
 
           {step === 3 && (
             <div className="grid gap-5">
-              <h2 className="text-xl font-bold text-[#0F172A]">Vehicle and speed</h2>
-              <div>
-                <label className="mb-2 block text-sm font-semibold text-[#334155]">Vehicle type</label>
-                <select aria-label="Vehicle type" className="w-full rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] px-4 py-3 text-sm" value={formData.vehicleType} onChange={(e) => setFormData({ ...formData, vehicleType: e.target.value })}>
-                  <option>BIKE</option>
-                  <option>AUTO</option>
-                  <option>MINI_VAN</option>
-                  <option>CAR_PREMIUM</option>
-                  <option>TRUCK</option>
-                </select>
+              <h2 className="text-xl font-bold text-[#0F172A]">Choose a Vehicle</h2>
+
+              <div className="overflow-hidden rounded-3xl border border-[#E5E7EB] bg-white">
+                {[
+                  { id: 'BIKE', label: 'Bike', seats: '1 Rider', rate: '25/km' },
+                  { id: 'AUTO', label: 'Auto', seats: '3 Seats', rate: '45/km' },
+                  { id: 'CAR_PREMIUM', label: 'Cab', seats: '4 Seats', rate: '120/km' },
+                  { id: 'TRUCK', label: 'Mini Truck', seats: 'For Goods', rate: '350/km' },
+                ].map((vehicle) => {
+                  const selected = formData.vehicleType === vehicle.id
+                  return (
+                    <button
+                      key={vehicle.id}
+                      type="button"
+                      onClick={() => setFormData({ ...formData, vehicleType: vehicle.id })}
+                      className={`flex w-full items-center justify-between border-b border-[#e5e7eb] px-4 py-3 text-left last:border-b-0 ${selected ? 'bg-[#eff6ff]' : 'bg-white'}`}
+                    >
+                      <div>
+                        <p className="text-sm font-semibold text-[#0f172a]">{vehicle.label}</p>
+                        <p className="text-xs text-[#64748b]">{vehicle.seats}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-sm font-semibold text-[#0f172a]">{vehicle.rate}</p>
+                        {selected ? <p className="text-xs font-semibold text-[#2563eb]">Selected</p> : null}
+                      </div>
+                    </button>
+                  )
+                })}
               </div>
 
               <div>
@@ -547,6 +657,61 @@ export default function BookParcelPage() {
                   <p className="mt-1 font-medium text-[#0F172A]">{formData.parcelWeight || '0'} kg</p>
                 </div>
               </div>
+
+              <div className="grid gap-3 md:grid-cols-2">
+                <div>
+                  <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.14em] text-[#64748B]">Payment Method</label>
+                  <select
+                    aria-label="Payment method"
+                    className="w-full rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] px-4 py-3 text-sm"
+                    value={formData.paymentMethod}
+                    onChange={(e) => setFormData({ ...formData, paymentMethod: e.target.value })}
+                  >
+                    <option value="COD">Cash on Delivery</option>
+                    <option value="WALLET">Wallet</option>
+                    <option value="UPI">UPI</option>
+                  </select>
+                </div>
+
+                {formData.deliveryType === 'SCHEDULED' ? (
+                  <div>
+                    <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.14em] text-[#64748B]">Schedule Time</label>
+                    <input
+                      type="datetime-local"
+                      aria-label="Schedule pickup time"
+                      className="w-full rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] px-4 py-3 text-sm"
+                      value={formData.scheduleAt}
+                      onChange={(e) => setFormData({ ...formData, scheduleAt: e.target.value })}
+                    />
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] px-4 py-3">
+                <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.14em] text-[#64748B]">Coupon</label>
+                <div className="grid gap-2 md:grid-cols-[1fr_auto]">
+                  <input
+                    value={formData.couponCode}
+                    onChange={(e) => setFormData({ ...formData, couponCode: e.target.value })}
+                    placeholder="VINAYAKA20"
+                    className="rounded-2xl border border-[#E5E7EB] bg-white px-4 py-2 text-sm"
+                  />
+                  <button
+                    type="button"
+                    onClick={applyCoupon}
+                    className="rounded-2xl bg-[#0F172A] px-4 py-2 text-sm font-semibold text-white"
+                  >
+                    Apply Coupon
+                  </button>
+                </div>
+                {couponMessage ? <p className="mt-2 text-xs text-[#2563EB]">{couponMessage}</p> : null}
+              </div>
+
+              <div className="rounded-2xl border border-[#DBEAFE] bg-[#EFF6FF] px-4 py-3 text-sm text-[#334155]">
+                <p>Estimated Fare: {estimatedFare.toFixed(2)}</p>
+                <p>Discount: {discountAmount.toFixed(2)}</p>
+                <p className="mt-1 text-base font-semibold text-[#0F172A]">Final Fare: {finalFare.toFixed(2)}</p>
+              </div>
             </div>
           )}
         </section>
@@ -567,7 +732,7 @@ export default function BookParcelPage() {
               className="inline-flex items-center gap-2 rounded-2xl bg-[linear-gradient(135deg,#1D4ED8,#2563EB)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
             >
               {(submitting || savingAddress) ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              {submitting ? 'Creating order...' : savingAddress ? 'Saving addresses...' : 'Confirm booking'}
+              {submitting ? 'Creating order...' : savingAddress ? 'Saving addresses...' : 'Confirm Ride'}
             </button>
           ) : (
             <button

@@ -67,6 +67,24 @@ const parseIntEnv = (name: string, fallback: number): number => {
   return parsed;
 };
 
+const resolveDatabaseUrl = (): string => {
+  const candidates = [
+    process.env.SUPABASE_DATABASE_URL,
+    process.env.SUPABASE_DB_URL,
+    process.env.SUPABASE_POOLER_URL,
+    process.env.DATABASE_URL,
+  ];
+
+  const resolved = candidates.find((value) => Boolean(value && value.trim()))?.trim();
+  if (!resolved) {
+    throw new Error(
+      'Missing required database URL. Set one of SUPABASE_DATABASE_URL, SUPABASE_DB_URL, SUPABASE_POOLER_URL, or DATABASE_URL.'
+    );
+  }
+
+  return resolved;
+};
+
 const isProduction = process.env.NODE_ENV === 'production';
 
 const requireEnv = (name: string, allowInNonProduction: boolean = true): string => {
@@ -106,10 +124,7 @@ const validateSecrets = (): void => {
 
 validateSecrets();
 
-const databaseUrl = process.env.DATABASE_URL?.trim();
-if (!databaseUrl) {
-  throw new Error('Missing required environment variable: DATABASE_URL');
-}
+const databaseUrl = resolveDatabaseUrl();
 
 const jwtSecret = requireEnv('JWT_SECRET', false);
 const jwtRefreshSecret = requireEnv('JWT_REFRESH_SECRET', false);

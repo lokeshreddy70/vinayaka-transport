@@ -15,10 +15,37 @@ const ENVIRONMENT_REQUIREMENTS: EnvironmentRequirement[] = [
   },
   {
     name: 'DATABASE_URL',
-    required: true,
+    required: false,
     description: 'PostgreSQL connection string',
     validate: (val) => {
-      if (!val) return false;
+      if (!val) return true;
+      return val.startsWith('postgresql://') || val.startsWith('postgres://');
+    },
+  },
+  {
+    name: 'SUPABASE_DATABASE_URL',
+    required: false,
+    description: 'Supabase Postgres connection string',
+    validate: (val) => {
+      if (!val) return true;
+      return val.startsWith('postgresql://') || val.startsWith('postgres://');
+    },
+  },
+  {
+    name: 'SUPABASE_DB_URL',
+    required: false,
+    description: 'Supabase Postgres connection string (alias)',
+    validate: (val) => {
+      if (!val) return true;
+      return val.startsWith('postgresql://') || val.startsWith('postgres://');
+    },
+  },
+  {
+    name: 'SUPABASE_POOLER_URL',
+    required: false,
+    description: 'Supabase pooled Postgres connection string',
+    validate: (val) => {
+      if (!val) return true;
       return val.startsWith('postgresql://') || val.startsWith('postgres://');
     },
   },
@@ -82,8 +109,26 @@ const ENVIRONMENT_REQUIREMENTS: EnvironmentRequirement[] = [
 ];
 
 export class EnvironmentValidator {
+  private static resolveDatabaseUrl(): string | null {
+    const value =
+      process.env.SUPABASE_DATABASE_URL?.trim() ||
+      process.env.SUPABASE_DB_URL?.trim() ||
+      process.env.SUPABASE_POOLER_URL?.trim() ||
+      process.env.DATABASE_URL?.trim() ||
+      '';
+
+    return value || null;
+  }
+
   static validate(): { valid: boolean; errors: string[] } {
     const errors: string[] = [];
+
+    const databaseUrl = this.resolveDatabaseUrl();
+    if (!databaseUrl) {
+      errors.push(
+        'Missing required database URL. Set one of SUPABASE_DATABASE_URL, SUPABASE_DB_URL, SUPABASE_POOLER_URL, or DATABASE_URL.'
+      );
+    }
 
     for (const req of ENVIRONMENT_REQUIREMENTS) {
       const value = process.env[req.name]?.trim();
@@ -137,7 +182,8 @@ export class EnvironmentValidator {
     logger.info('=== Environment Configuration ===');
     logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
     logger.info(`Port: ${process.env.PORT || 3001}`);
-    logger.info(`Database: ${process.env.DATABASE_URL?.substring(0, 50)}...`);
+    const dbUrl = this.resolveDatabaseUrl();
+    logger.info(`Database: ${dbUrl ? `${dbUrl.substring(0, 50)}...` : 'Not configured'}`);
     logger.info(`Twilio Configured: ${Boolean(process.env.TWILIO_ACCOUNT_SID)}`);
     logger.info(`CORS Origin: ${process.env.CORS_ORIGIN || '*'}`);
     logger.info('==================================');

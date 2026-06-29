@@ -65,6 +65,21 @@ export default function Home() {
             </Link>
           </div>
 
+          <div className="mb-12 flex flex-wrap justify-center gap-2">
+            {[
+              { href: '/customer', label: 'Customer App' },
+              { href: '/delivery-partner', label: 'Delivery Partner' },
+              { href: '/vendor', label: 'Vendor Portal' },
+              { href: '/fleet', label: 'Fleet Management' },
+              { href: '/admin', label: 'Admin Dashboard' },
+              { href: '/super-admin', label: 'Super Admin' },
+            ].map((portal) => (
+              <Link key={portal.href} href={portal.href} className="rounded-full border border-slate-600 bg-slate-800/60 px-4 py-2 text-sm font-semibold text-slate-100 hover:bg-slate-700">
+                {portal.label}
+              </Link>
+            ))}
+          </div>
+
           {/* Stats */}
           <div className="grid md:grid-cols-3 gap-8 mb-12">
             <div className="bg-slate-800/50 backdrop-blur p-6 rounded-lg border border-slate-700">
@@ -146,16 +161,16 @@ export default function Home() {
                 <div className="text-5xl mb-4">{route.emoji}</div>
                 <h4 className="text-2xl font-bold mb-2">{route.city}</h4>
                 <p className="text-gray-300 mb-4">Service Radius: {route.radius}</p>
-                <button className="bg-orange-500 text-white px-6 py-2 rounded-lg hover:bg-orange-600 transition">
-                  Learn More
-                </button>
+                <Link href="/customer/book" className="inline-flex bg-orange-500 text-white px-6 py-2 rounded-lg hover:bg-orange-600 transition">
+                  Book Delivery
+                </Link>
               </div>
             ))}
           </div>
 
           <div className="bg-slate-800/50 backdrop-blur p-8 rounded-lg border border-slate-700 text-center">
-            <p className="text-lg text-gray-300 mb-4">Expanding to entire Andhra Pradesh, South India, and all of India</p>
-            <p className="text-orange-400 font-semibold">Coming Soon: Intercity Routes, Express Delivery, Scheduled Deliveries</p>
+            <p className="text-lg text-gray-300 mb-4">Live coverage across core service zones with active scheduling and express support.</p>
+            <p className="text-orange-400 font-semibold">Intercity, Express, and Scheduled delivery flows are enabled in booking options.</p>
           </div>
         </div>
       </section>

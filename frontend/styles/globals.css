@@ -24,7 +24,7 @@
 body {
   background: var(--vt-background);
   color: var(--vt-text-primary);
-  font-family: var(--font-inter), 'Inter', 'SF Pro Display', 'Segoe UI', sans-serif;
+  font-family: var(--font-jakarta), 'Plus Jakarta Sans', 'SF Pro Display', 'Segoe UI', sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   background-image:
