@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { MapPin, Package, Truck, Clock } from 'lucide-react'
+import { Clock, Loader2, MapPin, Package, Search, Truck } from 'lucide-react'
 import { ACCESS_TOKEN_KEY, REFRESH_TOKEN_KEY, API_URL } from '@/lib/customer-api'
 
 type Address = {
@@ -12,14 +12,73 @@ type Address = {
   longitude: number
 }
 
-export default function BookParcel() {
+type PlaceSuggestion = {
+  id: string
+  label: string
+  lat: number
+  lng: number
+  city: string
+  state: string
+  pinCode: string
+}
+
+function normalizePlace(raw: any): PlaceSuggestion {
+  const city = raw?.address?.city || raw?.address?.town || raw?.address?.village || raw?.address?.county || ''
+  const state = raw?.address?.state || ''
+  const pinCode = raw?.address?.postcode || ''
+
+  return {
+    id: String(raw.place_id),
+    label: String(raw.display_name || '').trim(),
+    lat: Number(raw.lat),
+    lng: Number(raw.lon),
+    city,
+    state,
+    pinCode,
+  }
+}
+
+async function searchPlaces(query: string): Promise<PlaceSuggestion[]> {
+  if (!query.trim()) {
+    return []
+  }
+
+  const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&countrycodes=in&limit=6&q=${encodeURIComponent(query.trim())}`
+  const response = await fetch(url)
+
+  if (!response.ok) {
+    throw new Error('Unable to fetch location suggestions')
+  }
+
+  const data = await response.json()
+  if (!Array.isArray(data)) {
+    return []
+  }
+
+  return data
+    .map(normalizePlace)
+    .filter((item) => Number.isFinite(item.lat) && Number.isFinite(item.lng) && item.label)
+}
+
+export default function BookParcelPage() {
   const router = useRouter()
+
   const [step, setStep] = useState(1)
   const [submitting, setSubmitting] = useState(false)
+  const [savingAddress, setSavingAddress] = useState(false)
   const [message, setMessage] = useState('')
+
   const [addresses, setAddresses] = useState<Address[]>([])
   const [pickupAddressId, setPickupAddressId] = useState('')
   const [dropAddressId, setDropAddressId] = useState('')
+
+  const [pickupSearch, setPickupSearch] = useState('')
+  const [dropSearch, setDropSearch] = useState('')
+  const [pickupSuggestions, setPickupSuggestions] = useState<PlaceSuggestion[]>([])
+  const [dropSuggestions, setDropSuggestions] = useState<PlaceSuggestion[]>([])
+  const [pickupPlace, setPickupPlace] = useState<PlaceSuggestion | null>(null)
+  const [dropPlace, setDropPlace] = useState<PlaceSuggestion | null>(null)
+
   const [formData, setFormData] = useState({
     pickupLocation: '',
     dropLocation: '',
@@ -44,15 +103,6 @@ export default function BookParcel() {
       .then((data) => {
         const list = data?.data || []
         setAddresses(list)
-        if (list.length > 0) {
-          setPickupAddressId(list[0].id)
-          setDropAddressId(list[0].id)
-          setFormData((prev) => ({
-            ...prev,
-            pickupLocation: list[0].fullAddress,
-            dropLocation: list[0].fullAddress,
-          }))
-        }
       })
       .catch(() => {
         window.localStorage.removeItem(ACCESS_TOKEN_KEY)
@@ -61,28 +111,147 @@ export default function BookParcel() {
       })
   }, [router])
 
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (!pickupSearch.trim() || pickupSearch === pickupPlace?.label) {
+        setPickupSuggestions([])
+        return
+      }
+
+      searchPlaces(pickupSearch)
+        .then(setPickupSuggestions)
+        .catch(() => setPickupSuggestions([]))
+    }, 250)
+
+    return () => clearTimeout(timer)
+  }, [pickupSearch, pickupPlace?.label])
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (!dropSearch.trim() || dropSearch === dropPlace?.label) {
+        setDropSuggestions([])
+        return
+      }
+
+      searchPlaces(dropSearch)
+        .then(setDropSuggestions)
+        .catch(() => setDropSuggestions([]))
+    }, 250)
+
+    return () => clearTimeout(timer)
+  }, [dropSearch, dropPlace?.label])
+
   const canSubmit = useMemo(() => {
-    return !!pickupAddressId && !!dropAddressId && !!formData.parcelWeight
+    return !!pickupAddressId && !!dropAddressId && Number(formData.parcelWeight) > 0
   }, [pickupAddressId, dropAddressId, formData.parcelWeight])
 
-  const submitOrder = async () => {
+  function selectPickupSuggestion(place: PlaceSuggestion) {
+    setPickupPlace(place)
+    setPickupSearch(place.label)
+    setPickupSuggestions([])
+    setPickupAddressId('')
+    setFormData((prev) => ({ ...prev, pickupLocation: place.label }))
+  }
+
+  function selectDropSuggestion(place: PlaceSuggestion) {
+    setDropPlace(place)
+    setDropSearch(place.label)
+    setDropSuggestions([])
+    setDropAddressId('')
+    setFormData((prev) => ({ ...prev, dropLocation: place.label }))
+  }
+
+  async function persistAddress(place: PlaceSuggestion): Promise<string> {
+    const token = window.localStorage.getItem(ACCESS_TOKEN_KEY)
+    if (!token) {
+      throw new Error('Session expired. Please login again.')
+    }
+
+    const existing = addresses.find(
+      (address) =>
+        address.fullAddress.toLowerCase() === place.label.toLowerCase() ||
+        (Math.abs(address.latitude - place.lat) < 0.0001 && Math.abs(address.longitude - place.lng) < 0.0001)
+    )
+
+    if (existing) {
+      return existing.id
+    }
+
+    const response = await fetch(`${API_URL}/customers/addresses`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        type: 'OTHER',
+        fullAddress: place.label,
+        latitude: place.lat,
+        longitude: place.lng,
+        city: place.city,
+        state: place.state,
+        pinCode: place.pinCode,
+        isDefault: false,
+      }),
+    })
+
+    const payload = await response.json()
+    if (!response.ok) {
+      throw new Error(payload?.message || 'Unable to save selected address')
+    }
+
+    const created = payload?.data as Address
+    if (!created?.id) {
+      throw new Error('Address save failed')
+    }
+
+    setAddresses((prev) => [...prev, created])
+    return created.id
+  }
+
+  async function ensureSelectedAddresses() {
+    if (!pickupPlace || !dropPlace) {
+      throw new Error('Select pickup and drop from search suggestions')
+    }
+
+    setSavingAddress(true)
+    try {
+      const [pickupId, dropId] = await Promise.all([persistAddress(pickupPlace), persistAddress(dropPlace)])
+      setPickupAddressId(pickupId)
+      setDropAddressId(dropId)
+      return { pickupId, dropId }
+    } finally {
+      setSavingAddress(false)
+    }
+  }
+
+  async function submitOrder() {
     const token = window.localStorage.getItem(ACCESS_TOKEN_KEY)
     if (!token) {
       router.replace('/customer/login')
       return
     }
 
+    setMessage('')
+
+    if (!pickupAddressId || !dropAddressId) {
+      try {
+        await ensureSelectedAddresses()
+      } catch (error) {
+        setMessage(error instanceof Error ? error.message : 'Please select valid locations')
+        return
+      }
+    }
+
     const pickup = addresses.find((address) => address.id === pickupAddressId)
     const drop = addresses.find((address) => address.id === dropAddressId)
 
     if (!pickup || !drop) {
-      setMessage('Please select valid pickup and drop addresses')
+      setMessage('Could not resolve selected addresses. Please retry.')
       return
     }
 
     setSubmitting(true)
-    setMessage('')
-
     try {
       const response = await fetch(`${API_URL}/orders`, {
         method: 'POST',
@@ -110,21 +279,13 @@ export default function BookParcel() {
       })
 
       const payload = await response.json()
-
       if (!response.ok) {
         throw new Error(payload?.message || 'Failed to create order')
       }
 
-      setMessage(`Order created successfully: ${payload?.data?.orderNumber || payload?.data?.id}`)
+      setMessage(`Order created: ${payload?.data?.orderNumber || payload?.data?.id}`)
       setStep(1)
-      setFormData({
-        pickupLocation: pickup.fullAddress,
-        dropLocation: drop.fullAddress,
-        parcelCategory: 'DOCUMENTS',
-        parcelWeight: '',
-        vehicleType: 'BIKE',
-        deliveryType: 'STANDARD',
-      })
+      setFormData((prev) => ({ ...prev, parcelWeight: '', parcelCategory: 'DOCUMENTS', deliveryType: 'STANDARD', vehicleType: 'BIKE' }))
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Failed to create order')
     } finally {
@@ -133,113 +294,91 @@ export default function BookParcel() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-900 p-8">
-      <div className="max-w-4xl mx-auto">
-        {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-4xl font-bold text-white mb-2">Send a Parcel</h1>
-          <p className="text-gray-400">Fast, secure, and reliable delivery</p>
-        </div>
+    <main className="min-h-screen bg-[#F8FAFC] px-4 py-6 md:px-8 md:py-8">
+      <div className="mx-auto max-w-5xl">
+        <section className="rounded-[28px] border border-[#E5E7EB] bg-white p-6 shadow-[0_24px_64px_-36px_rgba(15,23,42,0.35)] md:p-8">
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[#64748B]">Book delivery</p>
+          <h1 className="mt-2 text-3xl font-bold text-[#0F172A] md:text-4xl">Book in 3 simple steps</h1>
+          <p className="mt-2 text-sm text-[#64748B]">Search places like ride apps and confirm instantly.</p>
+        </section>
 
-        {/* Progress Steps */}
-        <div className="flex justify-between mb-8">
+        <section className="mt-5 flex flex-wrap items-center gap-3">
           {[
             { num: 1, label: 'Locations', icon: MapPin },
-            { num: 2, label: 'Details', icon: Package },
+            { num: 2, label: 'Parcel', icon: Package },
             { num: 3, label: 'Vehicle', icon: Truck },
             { num: 4, label: 'Review', icon: Clock },
-          ].map((s, i) => (
-            <div key={i} className="flex items-center">
-              <div className={`flex items-center justify-center w-12 h-12 rounded-full font-bold text-lg ${step >= s.num ? 'bg-orange-500 text-white' : 'bg-slate-700 text-gray-400'}`}>
-                {s.num}
-              </div>
-              <div className="ml-3">
-                <p className={`text-sm font-semibold ${step >= s.num ? 'text-white' : 'text-gray-400'}`}>{s.label}</p>
-              </div>
-              {i < 3 && <div className={`w-12 h-1 mx-4 ${step > s.num ? 'bg-orange-500' : 'bg-slate-700'}`} />}
+          ].map((s) => (
+            <div key={s.num} className={`inline-flex items-center gap-2 rounded-2xl border px-4 py-2 text-sm font-semibold ${step >= s.num ? 'border-[#BFDBFE] bg-[#EFF6FF] text-[#1D4ED8]' : 'border-[#E5E7EB] bg-white text-[#64748B]'}`}>
+              <s.icon className="h-4 w-4" />
+              {s.num}. {s.label}
             </div>
           ))}
-        </div>
+        </section>
 
-        {/* Form Card */}
-        <div className="bg-slate-800 border border-slate-700 rounded-lg p-8 mb-6">
+        <section className="mt-5 rounded-[28px] border border-[#E5E7EB] bg-white p-6 shadow-[0_24px_64px_-36px_rgba(15,23,42,0.35)] md:p-8">
           {step === 1 && (
-            <div className="space-y-6">
-              <h2 className="text-2xl font-bold text-white">Where are we sending this?</h2>
+            <div className="grid gap-5">
+              <h2 className="text-xl font-bold text-[#0F172A]">Pickup and drop locations</h2>
 
-              <div>
-                <label className="block text-white font-semibold mb-2">📍 Pickup Location</label>
-                {addresses.length > 0 ? (
-                  <select
-                    aria-label="Pickup location"
-                    className="input-field"
-                    value={pickupAddressId}
-                    onChange={(e) => {
-                      const selected = addresses.find((address) => address.id === e.target.value)
-                      setPickupAddressId(e.target.value)
-                      if (selected) {
-                        setFormData({ ...formData, pickupLocation: selected.fullAddress })
-                      }
-                    }}
-                  >
-                    {addresses.map((address) => (
-                      <option key={address.id} value={address.id}>
-                        {address.fullAddress}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <input
-                    type="text"
-                    placeholder="Add addresses in profile first"
-                    className="input-field"
-                    value={formData.pickupLocation}
-                    readOnly
-                  />
-                )}
-              </div>
+              <div className="grid gap-4 md:grid-cols-2">
+                <div>
+                  <label className="mb-2 block text-sm font-semibold text-[#334155]">Pickup location</label>
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute left-3 top-3.5 h-4 w-4 text-[#94A3B8]" />
+                    <input
+                      value={pickupSearch}
+                      onChange={(event) => setPickupSearch(event.target.value)}
+                      placeholder="Search e.g. Vowel 14 School Nellore"
+                      className="w-full rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] py-3 pl-9 pr-3 text-sm text-[#0F172A] outline-none"
+                    />
+                  </div>
+                  {pickupSuggestions.length > 0 && (
+                    <ul className="mt-2 max-h-52 overflow-y-auto rounded-2xl border border-[#E5E7EB] bg-white p-2">
+                      {pickupSuggestions.map((place) => (
+                        <li key={place.id}>
+                          <button type="button" onClick={() => selectPickupSuggestion(place)} className="w-full rounded-xl px-3 py-2 text-left text-sm text-[#334155] hover:bg-[#EFF6FF]">
+                            {place.label}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
 
-              <div>
-                <label className="block text-white font-semibold mb-2">📍 Drop Location</label>
-                {addresses.length > 0 ? (
-                  <select
-                    aria-label="Drop location"
-                    className="input-field"
-                    value={dropAddressId}
-                    onChange={(e) => {
-                      const selected = addresses.find((address) => address.id === e.target.value)
-                      setDropAddressId(e.target.value)
-                      if (selected) {
-                        setFormData({ ...formData, dropLocation: selected.fullAddress })
-                      }
-                    }}
-                  >
-                    {addresses.map((address) => (
-                      <option key={address.id} value={address.id}>
-                        {address.fullAddress}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <input
-                    type="text"
-                    placeholder="Add addresses in profile first"
-                    className="input-field"
-                    value={formData.dropLocation}
-                    readOnly
-                  />
-                )}
+                <div>
+                  <label className="mb-2 block text-sm font-semibold text-[#334155]">Drop location</label>
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute left-3 top-3.5 h-4 w-4 text-[#94A3B8]" />
+                    <input
+                      value={dropSearch}
+                      onChange={(event) => setDropSearch(event.target.value)}
+                      placeholder="Search e.g. Zudio Tirupati"
+                      className="w-full rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] py-3 pl-9 pr-3 text-sm text-[#0F172A] outline-none"
+                    />
+                  </div>
+                  {dropSuggestions.length > 0 && (
+                    <ul className="mt-2 max-h-52 overflow-y-auto rounded-2xl border border-[#E5E7EB] bg-white p-2">
+                      {dropSuggestions.map((place) => (
+                        <li key={place.id}>
+                          <button type="button" onClick={() => selectDropSuggestion(place)} className="w-full rounded-xl px-3 py-2 text-left text-sm text-[#334155] hover:bg-[#EFF6FF]">
+                            {place.label}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
               </div>
             </div>
           )}
 
           {step === 2 && (
-            <div className="space-y-6">
-              <h2 className="text-2xl font-bold text-white">Parcel Details</h2>
-
+            <div className="grid gap-5">
+              <h2 className="text-xl font-bold text-[#0F172A]">Parcel details</h2>
               <div>
-                <label className="block text-white font-semibold mb-2">📦 Category</label>
-                <select aria-label="Parcel category" className="input-field" value={formData.parcelCategory} onChange={(e) => setFormData({ ...formData, parcelCategory: e.target.value })}>
+                <label className="mb-2 block text-sm font-semibold text-[#334155]">Category</label>
+                <select aria-label="Parcel category" className="w-full rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] px-4 py-3 text-sm" value={formData.parcelCategory} onChange={(e) => setFormData({ ...formData, parcelCategory: e.target.value })}>
                   <option>DOCUMENTS</option>
                   <option>FOOD</option>
                   <option>MEDICINE</option>
@@ -252,25 +391,18 @@ export default function BookParcel() {
               </div>
 
               <div>
-                <label className="block text-white font-semibold mb-2">⚖️ Weight (kg)</label>
-                <input
-                  type="number"
-                  placeholder="Enter weight"
-                  className="input-field"
-                  value={formData.parcelWeight}
-                  onChange={(e) => setFormData({ ...formData, parcelWeight: e.target.value })}
-                />
+                <label className="mb-2 block text-sm font-semibold text-[#334155]">Weight (kg)</label>
+                <input type="number" placeholder="Enter parcel weight" className="w-full rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] px-4 py-3 text-sm" value={formData.parcelWeight} onChange={(e) => setFormData({ ...formData, parcelWeight: e.target.value })} />
               </div>
             </div>
           )}
 
           {step === 3 && (
-            <div className="space-y-6">
-              <h2 className="text-2xl font-bold text-white">Vehicle & Delivery Type</h2>
-
+            <div className="grid gap-5">
+              <h2 className="text-xl font-bold text-[#0F172A]">Vehicle and speed</h2>
               <div>
-                <label className="block text-white font-semibold mb-2">🚗 Vehicle Type</label>
-                <select aria-label="Vehicle type" className="input-field" value={formData.vehicleType} onChange={(e) => setFormData({ ...formData, vehicleType: e.target.value })}>
+                <label className="mb-2 block text-sm font-semibold text-[#334155]">Vehicle type</label>
+                <select aria-label="Vehicle type" className="w-full rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] px-4 py-3 text-sm" value={formData.vehicleType} onChange={(e) => setFormData({ ...formData, vehicleType: e.target.value })}>
                   <option>BIKE</option>
                   <option>AUTO</option>
                   <option>MINI_VAN</option>
@@ -280,8 +412,8 @@ export default function BookParcel() {
               </div>
 
               <div>
-                <label className="block text-white font-semibold mb-2">⏰ Delivery Type</label>
-                <select aria-label="Delivery type" className="input-field" value={formData.deliveryType} onChange={(e) => setFormData({ ...formData, deliveryType: e.target.value })}>
+                <label className="mb-2 block text-sm font-semibold text-[#334155]">Delivery type</label>
+                <select aria-label="Delivery type" className="w-full rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] px-4 py-3 text-sm" value={formData.deliveryType} onChange={(e) => setFormData({ ...formData, deliveryType: e.target.value })}>
                   <option value="STANDARD">STANDARD - 2-3 hours</option>
                   <option value="EXPRESS">EXPRESS - 45-60 minutes</option>
                   <option value="PRIORITY">PRIORITY - 30 minutes</option>
@@ -293,73 +425,60 @@ export default function BookParcel() {
           )}
 
           {step === 4 && (
-            <div className="space-y-6">
-              <h2 className="text-2xl font-bold text-white">Review Your Order</h2>
-
-              <div className="space-y-4">
-                <div className="bg-slate-700/50 p-4 rounded-lg">
-                  <p className="text-gray-400 text-sm">From</p>
-                  <p className="text-white font-semibold">{formData.pickupLocation || 'Not set'}</p>
+            <div className="grid gap-4">
+              <h2 className="text-xl font-bold text-[#0F172A]">Review and confirm</h2>
+              <div className="rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] px-4 py-3 text-sm text-[#334155]">
+                <p className="text-xs uppercase tracking-[0.14em] text-[#64748B]">Pickup</p>
+                <p className="mt-1 font-medium">{pickupSearch || 'Not selected'}</p>
+              </div>
+              <div className="rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] px-4 py-3 text-sm text-[#334155]">
+                <p className="text-xs uppercase tracking-[0.14em] text-[#64748B]">Drop</p>
+                <p className="mt-1 font-medium">{dropSearch || 'Not selected'}</p>
+              </div>
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div className="rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] px-4 py-3">
+                  <p className="text-xs uppercase tracking-[0.14em] text-[#64748B]">Category</p>
+                  <p className="mt-1 font-medium text-[#0F172A]">{formData.parcelCategory}</p>
                 </div>
-
-                <div className="bg-slate-700/50 p-4 rounded-lg">
-                  <p className="text-gray-400 text-sm">To</p>
-                  <p className="text-white font-semibold">{formData.dropLocation || 'Not set'}</p>
-                </div>
-
-                <div className="grid md:grid-cols-2 gap-4">
-                  <div className="bg-slate-700/50 p-4 rounded-lg">
-                    <p className="text-gray-400 text-sm">Category</p>
-                    <p className="text-white font-semibold">{formData.parcelCategory}</p>
-                  </div>
-                  <div className="bg-slate-700/50 p-4 rounded-lg">
-                    <p className="text-gray-400 text-sm">Weight</p>
-                    <p className="text-white font-semibold">{formData.parcelWeight} kg</p>
-                  </div>
-                </div>
-
-                <div className="bg-orange-500/20 border border-orange-500/50 p-6 rounded-lg text-center">
-                  <p className="text-gray-300 mb-2">Estimated Price</p>
-                  <p className="text-4xl font-bold text-orange-400">₹149</p>
-                  <p className="text-gray-400 text-sm mt-2">Premium delivery included</p>
+                <div className="rounded-2xl border border-[#E5E7EB] bg-[#F8FAFC] px-4 py-3">
+                  <p className="text-xs uppercase tracking-[0.14em] text-[#64748B]">Weight</p>
+                  <p className="mt-1 font-medium text-[#0F172A]">{formData.parcelWeight || '0'} kg</p>
                 </div>
               </div>
             </div>
           )}
-        </div>
+        </section>
 
-        {/* Navigation Buttons */}
-        <div className="flex justify-between">
+        <section className="mt-5 flex items-center justify-between">
           <button
             onClick={() => setStep(Math.max(1, step - 1))}
-            className="px-8 py-3 rounded-lg font-semibold text-gray-300 hover:text-white transition disabled:opacity-50"
-            disabled={step === 1}
+            className="rounded-2xl border border-[#E5E7EB] bg-white px-5 py-3 text-sm font-semibold text-[#334155] disabled:opacity-50"
+            disabled={step === 1 || submitting || savingAddress}
           >
             Back
           </button>
 
           {step === 4 ? (
             <button
-              onClick={submitOrder}
-              disabled={!canSubmit || submitting}
-              className="bg-orange-500 text-white px-8 py-3 rounded-lg font-semibold hover:bg-orange-600 transition disabled:opacity-60"
+              onClick={() => void submitOrder()}
+              disabled={!canSubmit || submitting || savingAddress}
+              className="inline-flex items-center gap-2 rounded-2xl bg-[linear-gradient(135deg,#1D4ED8,#2563EB)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
             >
-              {submitting ? 'Creating Order...' : 'Confirm & Pay'}
+              {(submitting || savingAddress) ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              {submitting ? 'Creating order...' : savingAddress ? 'Saving addresses...' : 'Confirm booking'}
             </button>
           ) : (
             <button
               onClick={() => setStep(step + 1)}
-              className="bg-orange-500 text-white px-8 py-3 rounded-lg font-semibold hover:bg-orange-600 transition"
+              className="rounded-2xl bg-[linear-gradient(135deg,#1D4ED8,#2563EB)] px-5 py-3 text-sm font-semibold text-white"
             >
               Next
             </button>
           )}
-        </div>
+        </section>
 
-        {message ? <p className="mt-4 text-sm text-orange-300">{message}</p> : null}
+        {message ? <p className="mt-4 rounded-2xl border border-[#E5E7EB] bg-white px-4 py-3 text-sm text-[#334155]">{message}</p> : null}
       </div>
-    </div>
+    </main>
   )
 }
-
-
