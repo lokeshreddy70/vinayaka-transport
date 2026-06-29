@@ -253,13 +253,37 @@ export default function BookParcelPage() {
   }
 
   async function ensureSelectedAddresses() {
-    if (!pickupPlace || !dropPlace) {
-      throw new Error('Select pickup and drop from search suggestions')
+    const pickupCandidate = pickupPlace || (pickupSearch.trim()
+      ? {
+          id: `manual-pickup-${Date.now()}`,
+          label: pickupSearch.trim(),
+          lat: 13.0827,
+          lng: 80.2707,
+          city: 'Chennai',
+          state: 'Tamil Nadu',
+          pinCode: '',
+        }
+      : null)
+
+    const dropCandidate = dropPlace || (dropSearch.trim()
+      ? {
+          id: `manual-drop-${Date.now()}`,
+          label: dropSearch.trim(),
+          lat: 13.0418,
+          lng: 80.2341,
+          city: 'Chennai',
+          state: 'Tamil Nadu',
+          pinCode: '',
+        }
+      : null)
+
+    if (!pickupCandidate || !dropCandidate) {
+      throw new Error('Select or enter both pickup and drop locations')
     }
 
     setSavingAddress(true)
     try {
-      const [pickupId, dropId] = await Promise.all([persistAddress(pickupPlace), persistAddress(dropPlace)])
+      const [pickupId, dropId] = await Promise.all([persistAddress(pickupCandidate), persistAddress(dropCandidate)])
       setPickupAddressId(pickupId)
       setDropAddressId(dropId)
       return { pickupId, dropId }
