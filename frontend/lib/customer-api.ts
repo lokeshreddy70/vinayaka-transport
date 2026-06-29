@@ -1,4 +1,4 @@
-export const API_URL = process.env.NEXT_PUBLIC_CUSTOMER_API_URL || 'https://vinayaka-transport-api.vercel.app/api/v1'
+export const API_URL = process.env.NEXT_PUBLIC_CUSTOMER_API_URL || 'https://vinayaka-transport-api.vercel.app'
 export const ACCESS_TOKEN_KEY = 'vinayaka_customer_access_token'
 export const REFRESH_TOKEN_KEY = 'vinayaka_customer_refresh_token'
 
@@ -90,20 +90,33 @@ function normalizeOrder(input: any): Order {
 }
 
 async function request(path: string, token: string, init?: RequestInit): Promise<any> {
-  const response = await fetch(`${API_URL}${path}`, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-      ...(init?.headers || {}),
-    },
-  })
+  const baseCandidates = [API_URL, API_URL.replace(/\/api\/v1\/?$/, '')].filter(Boolean)
 
-  const payload = await response.json().catch(() => ({}))
-  if (!response.ok) {
-    throw new Error(payload?.message || payload?.error || 'Request failed')
+  for (const base of [...new Set(baseCandidates)]) {
+    const response = await fetch(`${base}${path}`, {
+      ...init,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+        ...(init?.headers || {}),
+      },
+    })
+
+    const contentType = response.headers.get('content-type') || ''
+    const payload = contentType.includes('application/json')
+      ? await response.json().catch(() => ({}))
+      : {}
+
+    if (response.ok) {
+      return payload
+    }
+
+    if (response.status !== 404 || base === baseCandidates[baseCandidates.length - 1]) {
+      throw new Error(payload?.message || payload?.error || `Request failed (${response.status})`)
+    }
   }
-  return payload
+
+  throw new Error('Request failed')
 }
 
 export async function fetchCustomerProfile(token: string): Promise<CustomerProfile | null> {
@@ -161,10 +174,11 @@ export async function trackByOrderNumber(orderNumber: string): Promise<TrackingR
   }
 
   const publicV1 = trimmed.replace(/\s+/g, '')
-  const candidates = [
-    `${API_URL}/orders/public/${encodeURIComponent(trimmed)}/track`,
-    `${API_URL}/tracking/${encodeURIComponent(publicV1)}`,
-  ]
+  const baseCandidates = [API_URL, API_URL.replace(/\/api\/v1\/?$/, '')].filter(Boolean)
+  const candidates = [...new Set(baseCandidates)].flatMap((base) => [
+    `${base}/orders/public/${encodeURIComponent(trimmed)}/track`,
+    `${base}/tracking/${encodeURIComponent(publicV1)}`,
+  ])
 
   for (const url of candidates) {
     const response = await fetch(url)
