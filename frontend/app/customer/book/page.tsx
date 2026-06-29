@@ -165,9 +165,9 @@ export default function BookParcelPage() {
     return () => clearTimeout(timer)
   }, [dropSearch, dropPlace?.label])
 
-  const canSubmit = useMemo(() => {
-    return !!pickupAddressId && !!dropAddressId && Number(formData.parcelWeight) > 0
-  }, [pickupAddressId, dropAddressId, formData.parcelWeight])
+  const canProceedToConfirm = useMemo(() => {
+    return !!pickupSearch.trim() && !!dropSearch.trim() && Number(formData.parcelWeight) > 0
+  }, [pickupSearch, dropSearch, formData.parcelWeight])
 
   function selectPickupSuggestion(place: PlaceSuggestion) {
     setPickupPlace(place)
@@ -558,7 +558,7 @@ export default function BookParcelPage() {
           {step === 4 ? (
             <button
               onClick={() => void submitOrder()}
-              disabled={!canSubmit || submitting || savingAddress}
+              disabled={!canProceedToConfirm || submitting || savingAddress}
               className="inline-flex items-center gap-2 rounded-2xl bg-[linear-gradient(135deg,#1D4ED8,#2563EB)] px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
             >
               {(submitting || savingAddress) ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
