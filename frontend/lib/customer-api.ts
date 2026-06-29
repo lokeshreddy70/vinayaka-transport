@@ -1,4 +1,4 @@
-export const API_URL = process.env.NEXT_PUBLIC_CUSTOMER_API_URL || 'https://vinayaka-transport-api.vercel.app'
+export const API_URL = process.env.NEXT_PUBLIC_CUSTOMER_API_URL || 'https://vinayaka-transport-api.vercel.app/api'
 export const ACCESS_TOKEN_KEY = 'vinayaka_customer_access_token'
 export const REFRESH_TOKEN_KEY = 'vinayaka_customer_refresh_token'
 
@@ -90,7 +90,11 @@ function normalizeOrder(input: any): Order {
 }
 
 async function request(path: string, token: string, init?: RequestInit): Promise<any> {
-  const baseCandidates = [API_URL, API_URL.replace(/\/api\/v1\/?$/, '')].filter(Boolean)
+  const baseCandidates = [
+    API_URL,
+    API_URL.replace(/\/api\/v1\/?$/, '/api'),
+    API_URL.replace(/\/api\/?$/, ''),
+  ].filter(Boolean)
 
   for (const base of [...new Set(baseCandidates)]) {
     const response = await fetch(`${base}${path}`, {
@@ -174,7 +178,11 @@ export async function trackByOrderNumber(orderNumber: string): Promise<TrackingR
   }
 
   const publicV1 = trimmed.replace(/\s+/g, '')
-  const baseCandidates = [API_URL, API_URL.replace(/\/api\/v1\/?$/, '')].filter(Boolean)
+  const baseCandidates = [
+    API_URL,
+    API_URL.replace(/\/api\/v1\/?$/, '/api'),
+    API_URL.replace(/\/api\/?$/, ''),
+  ].filter(Boolean)
   const candidates = [...new Set(baseCandidates)].flatMap((base) => [
     `${base}/orders/public/${encodeURIComponent(trimmed)}/track`,
     `${base}/tracking/${encodeURIComponent(publicV1)}`,

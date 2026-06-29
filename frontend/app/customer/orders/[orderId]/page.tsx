@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useParams, useRouter } from 'next/navigation'
 import { FileDown, LifeBuoy, MapPinned } from 'lucide-react'
-import { ACCESS_TOKEN_KEY, REFRESH_TOKEN_KEY, API_URL, fetchOrderDetails, trackByOrderNumber, type Order, type TrackingResponse } from '@/lib/customer-api'
+import { ACCESS_TOKEN_KEY, API_URL, fetchOrderDetails, trackByOrderNumber, type Order, type TrackingResponse } from '@/lib/customer-api'
 
 type TimelineEntry = {
   status: string
@@ -43,9 +43,7 @@ export default function CustomerOrderDetailsPage() {
         }
       })
       .catch(() => {
-        window.localStorage.removeItem(ACCESS_TOKEN_KEY)
-        window.localStorage.removeItem(REFRESH_TOKEN_KEY)
-        router.replace('/customer/login')
+        setError('Unable to load order right now. Please try again.')
       })
       .finally(() => setLoading(false))
   }, [params, router])

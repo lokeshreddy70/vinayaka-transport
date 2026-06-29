@@ -105,6 +105,94 @@ export class AuthService {
     return { user, accessToken, refreshToken };
   }
 
+  async registerCustomerWithPassword(
+    fullName: string,
+    phoneNumber: string,
+    password: string,
+    deviceId: string,
+    deviceInfo: string
+  ): Promise<{ user: any; accessToken: string; refreshToken: string }> {
+    if (password.length < 8) {
+      throw new ValidationError('Password must be at least 8 characters long');
+    }
+
+    const normalizedPhoneNumber = this.normalizePhone(phoneNumber);
+    const existing = await prisma.user.findUnique({ where: { phoneNumber: normalizedPhoneNumber } });
+
+    if (existing) {
+      throw new ValidationError('Account already exists. Please login.');
+    }
+
+    const passwordHash = await hashPassword(password);
+
+    const user = await prisma.user.create({
+      data: {
+        phoneNumber: normalizedPhoneNumber,
+        fullName,
+        role: 'CUSTOMER',
+        isVerified: true,
+        passwordHash,
+        jwtToken: '',
+        refreshToken: '',
+        deviceId,
+        deviceInfo,
+      },
+    });
+
+    await prisma.customer.create({
+      data: {
+        userId: user.id,
+      },
+    });
+
+    await prisma.wallet.create({
+      data: {
+        customerId: user.id,
+      },
+    });
+
+    await prisma.deviceSession.upsert({
+      where: { deviceId },
+      create: {
+        userId: user.id,
+        deviceId,
+        deviceName: deviceInfo,
+        deviceOS: 'unknown',
+      },
+      update: {
+        userId: user.id,
+        deviceName: deviceInfo,
+        lastActivityAt: new Date(),
+        isActive: true,
+      },
+    });
+
+    const accessToken = generateAccessToken({
+      userId: user.id,
+      phoneNumber: user.phoneNumber,
+      role: user.role,
+      deviceId,
+    });
+
+    const refreshToken = generateRefreshToken({
+      userId: user.id,
+      phoneNumber: user.phoneNumber,
+      role: user.role,
+      deviceId,
+    });
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        jwtToken: accessToken,
+        refreshToken,
+        lastLogin: new Date(),
+      },
+    });
+
+    return { user, accessToken, refreshToken };
+  }
+
   async getCurrentUser(userId: string): Promise<any> {
     const user = await prisma.user.findUnique({
       where: { id: userId },

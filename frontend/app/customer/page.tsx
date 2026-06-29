@@ -18,7 +18,6 @@ import {
 } from 'lucide-react'
 import {
   ACCESS_TOKEN_KEY,
-  REFRESH_TOKEN_KEY,
   fetchCustomerOrders,
   fetchCustomerProfile,
   getCustomerName,
@@ -60,9 +59,7 @@ export default function CustomerDashboardV3() {
         setOrders(o)
       })
       .catch(() => {
-        window.localStorage.removeItem(ACCESS_TOKEN_KEY)
-        window.localStorage.removeItem(REFRESH_TOKEN_KEY)
-        router.replace('/customer/login')
+        // Keep session until the user logs out manually.
       })
       .finally(() => setLoading(false))
   }, [router])

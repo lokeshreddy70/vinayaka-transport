@@ -49,6 +49,8 @@ export class AuthController {
         },
         accessToken: result.accessToken,
         refreshToken: result.refreshToken,
+        access_token: result.accessToken,
+        refresh_token: result.refreshToken,
       });
     } catch (error) {
       next(error);
@@ -100,6 +102,8 @@ export class AuthController {
         },
         accessToken: result.accessToken,
         refreshToken: result.refreshToken,
+        access_token: result.accessToken,
+        refresh_token: result.refreshToken,
       });
     } catch (error) {
       next(error);
@@ -129,6 +133,8 @@ export class AuthController {
         },
         accessToken: result.accessToken,
         refreshToken: result.refreshToken,
+        access_token: result.accessToken,
+        refresh_token: result.refreshToken,
       });
     } catch (error) {
       next(error);
@@ -176,6 +182,37 @@ export class AuthController {
       const user = await authService.getCurrentUser(req.user.userId);
 
       sendSuccess(res, 200, 'Current user retrieved', user);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async registerCustomer(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const fullName = String(req.body?.fullName || req.body?.full_name || '').trim();
+      const phoneNumber = String(req.body?.phoneNumber || req.body?.phone || '').trim();
+      const password = String(req.body?.password || '').trim();
+      const deviceId = String(req.body?.deviceId || req.body?.device_id || 'web-customer-device').trim();
+      const deviceInfo = String(req.body?.deviceInfo || req.body?.device_info || 'Customer Web App').trim();
+
+      if (!fullName || !phoneNumber || !password) {
+        throw new ValidationError('Missing required fields');
+      }
+
+      const result = await authService.registerCustomerWithPassword(fullName, phoneNumber, password, deviceId, deviceInfo);
+
+      sendSuccess(res, 201, 'Customer account created successfully', {
+        user: {
+          id: result.user.id,
+          phoneNumber: result.user.phoneNumber,
+          fullName: result.user.fullName,
+          role: result.user.role,
+        },
+        accessToken: result.accessToken,
+        refreshToken: result.refreshToken,
+        access_token: result.accessToken,
+        refresh_token: result.refreshToken,
+      });
     } catch (error) {
       next(error);
     }

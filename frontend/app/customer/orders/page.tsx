@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { Search } from 'lucide-react'
-import { ACCESS_TOKEN_KEY, REFRESH_TOKEN_KEY, fetchCustomerOrders, type Order } from '@/lib/customer-api'
+import { ACCESS_TOKEN_KEY, fetchCustomerOrders, type Order } from '@/lib/customer-api'
 import { CustomerBottomNav } from '@/components/customer/BottomNav'
 
 const statusFilters = ['ALL', 'PENDING', 'ASSIGNED', 'PICKED_UP', 'IN_TRANSIT', 'DELIVERED', 'CANCELLED']
@@ -26,9 +26,7 @@ export default function CustomerOrdersPage() {
     fetchCustomerOrders(token)
       .then(setOrders)
       .catch(() => {
-        window.localStorage.removeItem(ACCESS_TOKEN_KEY)
-        window.localStorage.removeItem(REFRESH_TOKEN_KEY)
-        router.replace('/customer/login')
+        // Keep session until the user logs out manually.
       })
       .finally(() => setLoading(false))
   }, [router])

@@ -20,9 +20,7 @@ export default function CustomerProfilePage() {
     fetchCustomerProfile(token)
       .then(setProfile)
       .catch(() => {
-        window.localStorage.removeItem(ACCESS_TOKEN_KEY)
-        window.localStorage.removeItem(REFRESH_TOKEN_KEY)
-        router.replace('/customer/login')
+        // Keep session until the user logs out manually.
       })
       .finally(() => setLoading(false))
   }, [router])

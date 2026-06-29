@@ -16,4 +16,28 @@ router.post('/logout', authenticate, (req, res, next) => authController.logout(r
 router.post('/refresh-token', (req, res, next) => authController.refreshToken(req as any, res, next));
 router.post('/refresh', (req, res, next) => authController.refreshToken(req as any, res, next));
 
+// Customer app compatibility endpoints
+router.post('/customer-request-otp', otpLimiter, (req, res, next) => {
+	req.body.phoneNumber = req.body.phoneNumber || req.body.phone;
+	return authController.sendOTP(req, res, next);
+});
+
+router.post('/customer-verify-otp', authLimiter, (req, res, next) => {
+	req.body.phoneNumber = req.body.phoneNumber || req.body.phone;
+	req.body.otp = req.body.otp || req.body.token;
+	req.body.deviceId = req.body.deviceId || req.body.device_id || 'web-customer-device';
+	req.body.deviceInfo = req.body.deviceInfo || req.body.device_info || 'Customer Web App';
+	return authController.login(req, res, next);
+});
+
+router.post('/customer-password-login', authLimiter, (req, res, next) => {
+	req.body.phoneNumber = req.body.phoneNumber || req.body.phone;
+	req.body.deviceId = req.body.deviceId || req.body.device_id || 'web-customer-device';
+	req.body.deviceInfo = req.body.deviceInfo || req.body.device_info || 'Customer Web App';
+	req.body.role = req.body.role || 'CUSTOMER';
+	return authController.loginWithPassword(req, res, next);
+});
+
+router.post('/customer-register', authLimiter, (req, res, next) => authController.registerCustomer(req, res, next));
+
 export default router;

@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Clock, Loader2, MapPin, Package, Search, Truck } from 'lucide-react'
-import { ACCESS_TOKEN_KEY, REFRESH_TOKEN_KEY, API_URL } from '@/lib/customer-api'
+import { ACCESS_TOKEN_KEY, API_URL } from '@/lib/customer-api'
 
 type Address = {
   id: string
@@ -105,9 +105,7 @@ export default function BookParcelPage() {
         setAddresses(list)
       })
       .catch(() => {
-        window.localStorage.removeItem(ACCESS_TOKEN_KEY)
-        window.localStorage.removeItem(REFRESH_TOKEN_KEY)
-        router.replace('/customer/login')
+        setMessage('Unable to load saved addresses right now. You can still search and add new ones.')
       })
   }, [router])
 

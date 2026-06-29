@@ -27,9 +27,28 @@ export default function CustomerLoginPage() {
   const canUsePassword = useMemo(() => phone.trim().length >= 10 && password.trim().length >= 8, [phone, password])
   const canSignup = useMemo(() => fullName.trim().length >= 2 && phone.trim().length >= 10 && password.trim().length >= 8, [fullName, phone, password])
 
+  const getDeviceId = () => {
+    const existing = window.localStorage.getItem('vinayaka_customer_device_id')
+    if (existing) {
+      return existing
+    }
+
+    const generated = `cust-web-${crypto.randomUUID()}`
+    window.localStorage.setItem('vinayaka_customer_device_id', generated)
+    return generated
+  }
+
   const saveSession = (payload: any) => {
-    window.localStorage.setItem(ACCESS_TOKEN_KEY, payload.access_token)
-    window.localStorage.setItem(REFRESH_TOKEN_KEY, payload.refresh_token)
+    const data = payload?.data || payload
+    const accessToken = data?.access_token || data?.accessToken
+    const refreshToken = data?.refresh_token || data?.refreshToken
+
+    if (!accessToken || !refreshToken) {
+      throw new Error('Invalid login response from server')
+    }
+
+    window.localStorage.setItem(ACCESS_TOKEN_KEY, accessToken)
+    window.localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken)
     router.replace('/customer')
   }
 
@@ -41,7 +60,7 @@ export default function CustomerLoginPage() {
       const response = await fetch(`${API_URL}/auth/customer-request-otp`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone }),
+        body: JSON.stringify({ phone, deviceId: getDeviceId(), deviceInfo: 'Customer Web App' }),
       })
       const payload = await response.json()
       if (!response.ok) {
@@ -70,7 +89,7 @@ export default function CustomerLoginPage() {
       const response = await fetch(`${API_URL}/auth/customer-verify-otp`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone, token: otp }),
+        body: JSON.stringify({ phone, token: otp, deviceId: getDeviceId(), deviceInfo: 'Customer Web App' }),
       })
       const payload = await response.json()
       if (!response.ok) {
@@ -92,7 +111,7 @@ export default function CustomerLoginPage() {
       const response = await fetch(`${API_URL}/auth/customer-password-login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone, password }),
+        body: JSON.stringify({ phone, password, deviceId: getDeviceId(), deviceInfo: 'Customer Web App' }),
       })
       const payload = await response.json()
       if (!response.ok) {
@@ -114,14 +133,13 @@ export default function CustomerLoginPage() {
       const response = await fetch(`${API_URL}/auth/customer-register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fullName, phone, password }),
+        body: JSON.stringify({ fullName, phone, password, deviceId: getDeviceId(), deviceInfo: 'Customer Web App' }),
       })
       const payload = await response.json()
       if (!response.ok) {
         throw new Error(payload?.error || 'Unable to create account')
       }
-      setMode('password')
-      setMessage('Account created. Login with your mobile number and password.')
+      saveSession(payload)
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Unable to create account')
     } finally {
