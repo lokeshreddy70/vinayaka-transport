@@ -301,17 +301,22 @@ export default function BookParcelPage() {
 
     setMessage('')
 
-    if (!pickupAddressId || !dropAddressId) {
+    let resolvedPickupId = pickupAddressId
+    let resolvedDropId = dropAddressId
+
+    if (!resolvedPickupId || !resolvedDropId) {
       try {
-        await ensureSelectedAddresses()
+        const resolved = await ensureSelectedAddresses()
+        resolvedPickupId = resolved.pickupId
+        resolvedDropId = resolved.dropId
       } catch (error) {
         setMessage(error instanceof Error ? error.message : 'Please select valid locations')
         return
       }
     }
 
-    const pickup = addresses.find((address) => address.id === pickupAddressId)
-    const drop = addresses.find((address) => address.id === dropAddressId)
+    const pickup = addresses.find((address) => address.id === resolvedPickupId)
+    const drop = addresses.find((address) => address.id === resolvedDropId)
 
     if (!pickup || !drop) {
       setMessage('Could not resolve selected addresses. Please retry.')
@@ -327,8 +332,8 @@ export default function BookParcelPage() {
           Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
-          pickupAddressId,
-          dropAddressId,
+          pickupAddressId: resolvedPickupId,
+          dropAddressId: resolvedDropId,
           pickupAddress: pickup.fullAddress,
           dropAddress: drop.fullAddress,
           pickupLat: pickup.latitude,
