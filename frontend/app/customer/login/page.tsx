@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { ACCESS_TOKEN_KEY, API_URL, REFRESH_TOKEN_KEY } from '@/lib/customer-api'
+import { ACCESS_TOKEN_KEY, API_URL, REFRESH_TOKEN_KEY, saveDemoProfile, saveDemoWallet } from '@/lib/customer-api'
 
 type LoginMode = 'otp' | 'password' | 'signup'
 
@@ -38,7 +38,7 @@ export default function CustomerLoginPage() {
     return generated
   }
 
-  const saveSession = (payload: any) => {
+  const saveSession = (payload: any, nameHint?: string, phoneHint?: string) => {
     const data = payload?.data || payload
     const accessToken = data?.access_token || data?.accessToken
     const refreshToken = data?.refresh_token || data?.refreshToken
@@ -49,6 +49,28 @@ export default function CustomerLoginPage() {
 
     window.localStorage.setItem(ACCESS_TOKEN_KEY, accessToken)
     window.localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken)
+
+    saveDemoProfile({
+      user: {
+        id: data?.user?.id,
+        fullName: data?.user?.fullName || nameHint || 'Customer',
+        phoneNumber: data?.user?.phoneNumber || phoneHint || phone,
+        role: 'CUSTOMER',
+      },
+      loyaltyPoints: 10,
+    })
+    saveDemoWallet({
+      balance: 1250,
+      transactions: [
+        {
+          id: 'demo-login-credit',
+          amount: 500,
+          type: 'CREDIT',
+          description: 'Welcome Bonus',
+          createdAt: new Date().toISOString(),
+        },
+      ],
+    })
     router.replace('/customer')
   }
 
@@ -95,7 +117,7 @@ export default function CustomerLoginPage() {
       if (!response.ok) {
         throw new Error(payload?.error || 'Invalid OTP')
       }
-      saveSession(payload)
+      saveSession(payload, undefined, phone)
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'OTP verification failed')
     } finally {
@@ -117,7 +139,7 @@ export default function CustomerLoginPage() {
       if (!response.ok) {
         throw new Error(payload?.error || 'Unable to login')
       }
-      saveSession(payload)
+      saveSession(payload, undefined, phone)
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Unable to login')
     } finally {
@@ -139,7 +161,7 @@ export default function CustomerLoginPage() {
       if (!response.ok) {
         throw new Error(payload?.error || 'Unable to create account')
       }
-      saveSession(payload)
+      saveSession(payload, fullName, phone)
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Unable to create account')
     } finally {

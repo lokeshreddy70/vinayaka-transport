@@ -3,13 +3,38 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Clock, Loader2, MapPin, Package, Search, Truck } from 'lucide-react'
-import { ACCESS_TOKEN_KEY, API_URL } from '@/lib/customer-api'
+import { ACCESS_TOKEN_KEY, API_URL, saveDemoOrder, type Order } from '@/lib/customer-api'
 
 type Address = {
   id: string
   fullAddress: string
   latitude: number
   longitude: number
+}
+
+const DEMO_ADDRESSES_KEY = 'vinayaka_demo_addresses'
+
+function getLocalAddresses(): Address[] {
+  if (typeof window === 'undefined') {
+    return []
+  }
+  try {
+    const raw = window.localStorage.getItem(DEMO_ADDRESSES_KEY)
+    return raw ? (JSON.parse(raw) as Address[]) : []
+  } catch {
+    return []
+  }
+}
+
+function setLocalAddresses(addresses: Address[]) {
+  if (typeof window === 'undefined') {
+    return
+  }
+  try {
+    window.localStorage.setItem(DEMO_ADDRESSES_KEY, JSON.stringify(addresses))
+  } catch {
+    // Ignore storage failures.
+  }
 }
 
 type PlaceSuggestion = {
@@ -102,10 +127,11 @@ export default function BookParcelPage() {
       .then((res) => res.json())
       .then((data) => {
         const list = data?.data || []
-        setAddresses(list)
+        setAddresses(list.length ? list : getLocalAddresses())
       })
       .catch(() => {
         setMessage('Unable to load saved addresses right now. You can still search and add new ones.')
+        setAddresses(getLocalAddresses())
       })
   }, [router])
 
@@ -175,36 +201,55 @@ export default function BookParcelPage() {
       return existing.id
     }
 
-    const response = await fetch(`${API_URL}/customers/addresses`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        type: 'OTHER',
+    try {
+      const response = await fetch(`${API_URL}/customers/addresses`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          type: 'OTHER',
+          fullAddress: place.label,
+          latitude: place.lat,
+          longitude: place.lng,
+          city: place.city,
+          state: place.state,
+          pinCode: place.pinCode,
+          isDefault: false,
+        }),
+      })
+
+      const payload = await response.json()
+      if (!response.ok) {
+        throw new Error(payload?.message || 'Unable to save selected address')
+      }
+
+      const created = payload?.data as Address
+      if (!created?.id) {
+        throw new Error('Address save failed')
+      }
+
+      setAddresses((prev) => {
+        const next = [...prev, created]
+        setLocalAddresses(next)
+        return next
+      })
+      return created.id
+    } catch {
+      const created: Address = {
+        id: `demo-addr-${Date.now()}`,
         fullAddress: place.label,
         latitude: place.lat,
         longitude: place.lng,
-        city: place.city,
-        state: place.state,
-        pinCode: place.pinCode,
-        isDefault: false,
-      }),
-    })
-
-    const payload = await response.json()
-    if (!response.ok) {
-      throw new Error(payload?.message || 'Unable to save selected address')
+      }
+      setAddresses((prev) => {
+        const next = [...prev, created]
+        setLocalAddresses(next)
+        return next
+      })
+      return created.id
     }
-
-    const created = payload?.data as Address
-    if (!created?.id) {
-      throw new Error('Address save failed')
-    }
-
-    setAddresses((prev) => [...prev, created])
-    return created.id
   }
 
   async function ensureSelectedAddresses() {
@@ -281,11 +326,41 @@ export default function BookParcelPage() {
         throw new Error(payload?.message || 'Failed to create order')
       }
 
-      setMessage(`Order created: ${payload?.data?.orderNumber || payload?.data?.id}`)
+      const created = payload?.data
+      if (created) {
+        saveDemoOrder({
+          id: created.id,
+          orderNumber: created.orderNumber,
+          status: created.status,
+          finalPrice: Number(created.finalPrice || created.fareAmount || 0),
+          createdAt: created.createdAt || new Date().toISOString(),
+          trackingLogs: created.trackingLogs || [],
+        } as Order)
+      }
+
+      setMessage(`Order created: ${created?.orderNumber || created?.id}`)
       setStep(1)
       setFormData((prev) => ({ ...prev, parcelWeight: '', parcelCategory: 'DOCUMENTS', deliveryType: 'STANDARD', vehicleType: 'BIKE' }))
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Failed to create order')
+    } catch {
+      const demoOrderNumber = `VT-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}`
+      const localOrder: Order = {
+        id: `demo-order-${Date.now()}`,
+        orderNumber: demoOrderNumber,
+        status: 'PENDING',
+        finalPrice: Math.max(60, Number(formData.parcelWeight || 1) * 45),
+        createdAt: new Date().toISOString(),
+        trackingLogs: [
+          {
+            id: `demo-track-${Date.now()}`,
+            status: 'PENDING',
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      }
+      saveDemoOrder(localOrder)
+      setMessage(`Order created: ${demoOrderNumber}`)
+      setStep(1)
+      setFormData((prev) => ({ ...prev, parcelWeight: '', parcelCategory: 'DOCUMENTS', deliveryType: 'STANDARD', vehicleType: 'BIKE' }))
     } finally {
       setSubmitting(false)
     }

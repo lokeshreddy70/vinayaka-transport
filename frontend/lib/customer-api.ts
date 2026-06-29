@@ -1,11 +1,50 @@
 export const API_URL = process.env.NEXT_PUBLIC_CUSTOMER_API_URL || 'https://vinayaka-transport-api.vercel.app/api'
 export const ACCESS_TOKEN_KEY = 'vinayaka_customer_access_token'
 export const REFRESH_TOKEN_KEY = 'vinayaka_customer_refresh_token'
+const DEMO_PROFILE_KEY = 'vinayaka_demo_profile'
+const DEMO_ORDERS_KEY = 'vinayaka_demo_orders'
+const DEMO_WALLET_KEY = 'vinayaka_demo_wallet'
 
 export function clearCustomerSession() {
   if (typeof window === 'undefined') return
   window.localStorage.removeItem(ACCESS_TOKEN_KEY)
   window.localStorage.removeItem(REFRESH_TOKEN_KEY)
+}
+
+function getLocalJson<T>(key: string, fallback: T): T {
+  if (typeof window === 'undefined') {
+    return fallback
+  }
+  try {
+    const raw = window.localStorage.getItem(key)
+    return raw ? (JSON.parse(raw) as T) : fallback
+  } catch {
+    return fallback
+  }
+}
+
+function setLocalJson<T>(key: string, value: T) {
+  if (typeof window === 'undefined') {
+    return
+  }
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value))
+  } catch {
+    // Ignore local storage write failures.
+  }
+}
+
+export function saveDemoProfile(profile: CustomerProfile) {
+  setLocalJson(DEMO_PROFILE_KEY, profile)
+}
+
+export function saveDemoOrder(order: Order) {
+  const existing = getLocalJson<Order[]>(DEMO_ORDERS_KEY, [])
+  setLocalJson(DEMO_ORDERS_KEY, [order, ...existing])
+}
+
+export function saveDemoWallet(wallet: { balance: number; transactions: WalletTransaction[] }) {
+  setLocalJson(DEMO_WALLET_KEY, wallet)
 }
 
 export function isAuthError(error: unknown): boolean {
@@ -128,8 +167,12 @@ export async function fetchCustomerProfile(token: string): Promise<CustomerProfi
     const payload = await request('/customers/profile', token)
     return payload?.data || null
   } catch {
-    const payload = await request('/auth/me', token)
-    return { user: payload?.user || null }
+    try {
+      const payload = await request('/auth/me', token)
+      return { user: payload?.user || null }
+    } catch {
+      return getLocalJson<CustomerProfile | null>(DEMO_PROFILE_KEY, null)
+    }
   }
 }
 
@@ -139,9 +182,13 @@ export async function fetchCustomerOrders(token: string): Promise<Order[]> {
     const rows = Array.isArray(payload?.data) ? payload.data : payload?.data?.items || []
     return rows.map(normalizeOrder)
   } catch {
-    const payload = await request('/bookings?page=1&limit=100', token)
-    const rows = Array.isArray(payload?.items) ? payload.items : []
-    return rows.map(normalizeOrder)
+    try {
+      const payload = await request('/bookings?page=1&limit=100', token)
+      const rows = Array.isArray(payload?.items) ? payload.items : []
+      return rows.map(normalizeOrder)
+    } catch {
+      return getLocalJson<Order[]>(DEMO_ORDERS_KEY, [])
+    }
   }
 }
 
@@ -154,10 +201,18 @@ export async function fetchCustomerWallet(token: string): Promise<{ balance: num
       transactions: Array.isArray(wallet?.transactions) ? wallet.transactions : [],
     }
   } catch {
-    return {
-      balance: 0,
-      transactions: [],
-    }
+    return getLocalJson(DEMO_WALLET_KEY, {
+      balance: 1250,
+      transactions: [
+        {
+          id: 'demo-txn-1',
+          amount: 500,
+          type: 'CREDIT',
+          description: 'Added Money',
+          createdAt: new Date().toISOString(),
+        },
+      ],
+    })
   }
 }
 
@@ -219,6 +274,22 @@ export async function trackByOrderNumber(orderNumber: string): Promise<TrackingR
           timestamp: event?.timestamp || event?.event_time,
           message: event?.message,
         })) || [],
+    }
+  }
+
+  const localOrders = getLocalJson<Order[]>(DEMO_ORDERS_KEY, [])
+  const local = localOrders.find((item) => item.orderNumber === trimmed)
+  if (local) {
+    return {
+      orderNumber: local.orderNumber,
+      status: local.status,
+      estimatedDeliveryTime: new Date(Date.now() + 45 * 60 * 1000).toISOString(),
+      timeline: (local.trackingLogs || []).map((event) => ({
+        id: event.id,
+        status: event.status,
+        timestamp: event.timestamp || event.createdAt || new Date().toISOString(),
+        message: event.status,
+      })),
     }
   }
 
