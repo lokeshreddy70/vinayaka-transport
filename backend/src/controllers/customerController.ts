@@ -3,6 +3,8 @@ import { AuthRequest } from '../middleware/auth';
 import prisma from '../config/database';
 import { sendSuccess, sendError } from '../utils/response';
 import { NotFoundError, ValidationError } from '../utils/errors';
+import { isDatabaseUnavailable } from '../utils/dbFallback';
+import { demoStore } from '../services/demoStore';
 
 export class CustomerController {
   async searchCustomers(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
@@ -82,20 +84,45 @@ export class CustomerController {
     try {
       if (!req.user) throw new ValidationError('User not authenticated');
 
-      const customer = await prisma.customer.findUnique({
-        where: { userId: req.user.userId },
-        include: {
-          addresses: true,
-          wallet: true,
-          emergencyContacts: true,
-        },
-      });
+      try {
+        const customer = await prisma.customer.findUnique({
+          where: { userId: req.user.userId },
+          include: {
+            addresses: true,
+            wallet: true,
+            emergencyContacts: true,
+          },
+        });
 
-      if (!customer) {
-        throw new NotFoundError('Customer not found');
+        if (!customer) {
+          throw new NotFoundError('Customer not found');
+        }
+
+        sendSuccess(res, 200, 'Customer profile retrieved', customer);
+      } catch (error) {
+        if (!isDatabaseUnavailable(error)) {
+          throw error;
+        }
+
+        const demoUser = demoStore.getUserById(req.user.userId);
+        if (!demoUser) {
+          throw new NotFoundError('Customer not found');
+        }
+
+        sendSuccess(res, 200, 'Customer profile retrieved', {
+          id: demoStore.getCustomerIdByUserId(req.user.userId),
+          userId: req.user.userId,
+          addresses: demoStore.getAddresses(demoStore.getCustomerIdByUserId(req.user.userId) || ''),
+          wallet: demoStore.getWallet(),
+          emergencyContacts: [],
+          user: {
+            id: demoUser.id,
+            phoneNumber: demoUser.phoneNumber,
+            fullName: demoUser.fullName,
+            role: demoUser.role,
+          },
+        });
       }
-
-      sendSuccess(res, 200, 'Customer profile retrieved', customer);
     } catch (error) {
       next(error);
     }
@@ -132,28 +159,50 @@ export class CustomerController {
         throw new ValidationError('Missing required fields');
       }
 
-      const customer = await prisma.customer.findUnique({
-        where: { userId: req.user.userId },
-      });
+      let address;
+      try {
+        const customer = await prisma.customer.findUnique({ where: { userId: req.user.userId } });
 
-      if (!customer) {
-        throw new NotFoundError('Customer not found');
-      }
+        if (!customer) {
+          throw new NotFoundError('Customer not found');
+        }
 
-      const address = await prisma.address.create({
-        data: {
-          customerId: customer.id,
+        address = await prisma.address.create({
+          data: {
+            customerId: customer.id,
+            type: type || 'OTHER',
+            fullAddress,
+            landmark,
+            latitude,
+            longitude,
+            city,
+            state,
+            pinCode,
+            isDefault,
+          },
+        });
+      } catch (error) {
+        if (!isDatabaseUnavailable(error)) {
+          throw error;
+        }
+
+        const customerId = demoStore.getCustomerIdByUserId(req.user.userId);
+        if (!customerId) {
+          throw new NotFoundError('Customer not found');
+        }
+
+        address = demoStore.addAddress(customerId, {
           type: type || 'OTHER',
           fullAddress,
           landmark,
-          latitude,
-          longitude,
-          city,
-          state,
-          pinCode,
-          isDefault,
-        },
-      });
+          latitude: Number(latitude),
+          longitude: Number(longitude),
+          city: city || 'Unknown',
+          state: state || 'Unknown',
+          pinCode: pinCode || '',
+          isDefault: Boolean(isDefault),
+        });
+      }
 
       sendSuccess(res, 201, 'Address added successfully', address);
     } catch (error) {
@@ -165,17 +214,26 @@ export class CustomerController {
     try {
       if (!req.user) throw new ValidationError('User not authenticated');
 
-      const customer = await prisma.customer.findUnique({
-        where: { userId: req.user.userId },
-      });
+      let addresses;
+      try {
+        const customer = await prisma.customer.findUnique({ where: { userId: req.user.userId } });
 
-      if (!customer) {
-        throw new NotFoundError('Customer not found');
+        if (!customer) {
+          throw new NotFoundError('Customer not found');
+        }
+
+        addresses = await prisma.address.findMany({ where: { customerId: customer.id } });
+      } catch (error) {
+        if (!isDatabaseUnavailable(error)) {
+          throw error;
+        }
+
+        const customerId = demoStore.getCustomerIdByUserId(req.user.userId);
+        if (!customerId) {
+          throw new NotFoundError('Customer not found');
+        }
+        addresses = demoStore.getAddresses(customerId);
       }
-
-      const addresses = await prisma.address.findMany({
-        where: { customerId: customer.id },
-      });
 
       sendSuccess(res, 200, 'Addresses retrieved', addresses);
     } catch (error) {
@@ -187,23 +245,34 @@ export class CustomerController {
     try {
       if (!req.user) throw new ValidationError('User not authenticated');
 
-      const customer = await prisma.customer.findUnique({
-        where: { userId: req.user.userId },
-      });
+      let orders;
+      try {
+        const customer = await prisma.customer.findUnique({ where: { userId: req.user.userId } });
 
-      if (!customer) {
-        throw new NotFoundError('Customer not found');
+        if (!customer) {
+          throw new NotFoundError('Customer not found');
+        }
+
+        orders = await prisma.order.findMany({
+          where: { customerId: customer.id },
+          include: {
+            delivery: true,
+            trackingLogs: true,
+          },
+          orderBy: { createdAt: 'desc' },
+          take: 50,
+        });
+      } catch (error) {
+        if (!isDatabaseUnavailable(error)) {
+          throw error;
+        }
+
+        const customerId = demoStore.getCustomerIdByUserId(req.user.userId);
+        if (!customerId) {
+          throw new NotFoundError('Customer not found');
+        }
+        orders = demoStore.getOrders(customerId);
       }
-
-      const orders = await prisma.order.findMany({
-        where: { customerId: customer.id },
-        include: {
-          delivery: true,
-          trackingLogs: true,
-        },
-        orderBy: { createdAt: 'desc' },
-        take: 50,
-      });
 
       sendSuccess(res, 200, 'Orders retrieved', orders);
     } catch (error) {
@@ -215,16 +284,24 @@ export class CustomerController {
     try {
       if (!req.user) throw new ValidationError('User not authenticated');
 
-      const customer = await prisma.customer.findUnique({
-        where: { userId: req.user.userId },
-        include: { wallet: { include: { transactions: { take: 20 } } } },
-      });
+      try {
+        const customer = await prisma.customer.findUnique({
+          where: { userId: req.user.userId },
+          include: { wallet: { include: { transactions: { take: 20 } } } },
+        });
 
-      if (!customer) {
-        throw new NotFoundError('Customer not found');
+        if (!customer) {
+          throw new NotFoundError('Customer not found');
+        }
+
+        sendSuccess(res, 200, 'Wallet retrieved', customer.wallet);
+      } catch (error) {
+        if (!isDatabaseUnavailable(error)) {
+          throw error;
+        }
+
+        sendSuccess(res, 200, 'Wallet retrieved', demoStore.getWallet());
       }
-
-      sendSuccess(res, 200, 'Wallet retrieved', customer.wallet);
     } catch (error) {
       next(error);
     }

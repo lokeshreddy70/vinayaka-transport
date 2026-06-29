@@ -7,18 +7,34 @@ import prisma from '../config/database';
 import QRCode from 'qrcode';
 import bwipjs from 'bwip-js';
 import { emitOrderUpdate } from '../realtime/socket';
+import { isDatabaseUnavailable } from '../utils/dbFallback';
+import { demoStore } from '../services/demoStore';
 
 export class OrderController {
   async createOrder(req: AuthRequest, res: Response, next: NextFunction): Promise<void> {
     try {
       if (!req.user) throw new ValidationError('User not authenticated');
 
-      const customer = await prisma.customer.findUnique({
-        where: { userId: req.user.userId },
-      });
+      let customerId: string;
+      try {
+        const customer = await prisma.customer.findUnique({
+          where: { userId: req.user.userId },
+        });
 
-      if (!customer) {
-        throw new NotFoundError('Customer not found');
+        if (!customer) {
+          throw new NotFoundError('Customer not found');
+        }
+        customerId = customer.id;
+      } catch (error) {
+        if (!isDatabaseUnavailable(error)) {
+          throw error;
+        }
+
+        const demoCustomerId = demoStore.getCustomerIdByUserId(req.user.userId);
+        if (!demoCustomerId) {
+          throw new NotFoundError('Customer not found');
+        }
+        customerId = demoCustomerId;
       }
 
       const { pickupAddressId, dropAddressId, pickupLat, pickupLng, dropLat, dropLng, parcelCategory, parcelWeight, parcelValue, vehicleType, deliveryType, paymentMethod, isFragile, specialInstructions } = req.body;
@@ -31,32 +47,52 @@ export class OrderController {
         throw new ValidationError('Pickup and drop addresses are required');
       }
 
-      const [pickupAddress, dropAddress] = await Promise.all([
-        prisma.address.findFirst({ where: { id: pickupAddressId, customerId: customer.id } }),
-        prisma.address.findFirst({ where: { id: dropAddressId, customerId: customer.id } }),
-      ]);
+      let order;
+      try {
+        const [pickupAddress, dropAddress] = await Promise.all([
+          prisma.address.findFirst({ where: { id: pickupAddressId, customerId } }),
+          prisma.address.findFirst({ where: { id: dropAddressId, customerId } }),
+        ]);
 
-      if (!pickupAddress || !dropAddress) {
-        throw new ValidationError('Address not found for this customer');
+        if (!pickupAddress || !dropAddress) {
+          throw new ValidationError('Address not found for this customer');
+        }
+
+        order = await orderService.createOrder({
+          customerId,
+          pickupLat,
+          pickupLng,
+          pickupAddressId,
+          dropLat,
+          dropLng,
+          dropAddressId,
+          parcelCategory,
+          parcelWeight,
+          parcelValue,
+          vehicleType,
+          deliveryType,
+          paymentMethod,
+          isFragile,
+          specialInstructions,
+        });
+      } catch (error) {
+        if (!isDatabaseUnavailable(error)) {
+          throw error;
+        }
+
+        order = demoStore.createOrder(customerId, {
+          pickupAddressId,
+          dropAddressId,
+          pickupLat: Number(pickupLat),
+          pickupLng: Number(pickupLng),
+          dropLat: Number(dropLat),
+          dropLng: Number(dropLng),
+          parcelCategory,
+          parcelWeight: Number(parcelWeight),
+          vehicleType,
+          deliveryType,
+        });
       }
-
-      const order = await orderService.createOrder({
-        customerId: customer.id,
-        pickupLat,
-        pickupLng,
-        pickupAddressId,
-        dropLat,
-        dropLng,
-        dropAddressId,
-        parcelCategory,
-        parcelWeight,
-        parcelValue,
-        vehicleType,
-        deliveryType,
-        paymentMethod,
-        isFragile,
-        specialInstructions,
-      });
 
       sendSuccess(res, 201, 'Order created successfully', order);
     } catch (error) {
@@ -69,9 +105,21 @@ export class OrderController {
       if (!req.user) throw new ValidationError('User not authenticated');
       const { orderId } = req.params;
 
-      const order = await orderService.getOrder(orderId);
-      await this.assertOrderAccess(orderId, req.user.userId, req.user.role);
-      sendSuccess(res, 200, 'Order retrieved', order);
+      try {
+        const order = await orderService.getOrder(orderId);
+        await this.assertOrderAccess(orderId, req.user.userId, req.user.role);
+        sendSuccess(res, 200, 'Order retrieved', order);
+      } catch (error) {
+        if (!isDatabaseUnavailable(error)) {
+          throw error;
+        }
+
+        const order = demoStore.getOrderById(orderId);
+        if (!order) {
+          throw new NotFoundError('Order not found');
+        }
+        sendSuccess(res, 200, 'Order retrieved', order);
+      }
     } catch (error) {
       next(error);
     }
@@ -245,8 +293,25 @@ export class OrderController {
   async publicTrack(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { orderNumber } = req.params;
-      const result = await orderService.getPublicTracking(orderNumber);
-      sendSuccess(res, 200, 'Public tracking data retrieved', result);
+      try {
+        const result = await orderService.getPublicTracking(orderNumber);
+        sendSuccess(res, 200, 'Public tracking data retrieved', result);
+      } catch (error) {
+        if (!isDatabaseUnavailable(error)) {
+          throw error;
+        }
+
+        const order = demoStore.getOrderByNumber(orderNumber);
+        if (!order) {
+          throw new NotFoundError('Order not found');
+        }
+        sendSuccess(res, 200, 'Public tracking data retrieved', {
+          orderNumber: order.orderNumber,
+          status: order.status,
+          estimatedDeliveryTime: new Date(Date.now() + 45 * 60 * 1000).toISOString(),
+          timeline: order.trackingLogs,
+        });
+      }
     } catch (error) {
       next(error);
     }
@@ -304,10 +369,27 @@ export class OrderController {
       if (!req.user) throw new ValidationError('User not authenticated');
       const { orderId } = req.params;
 
-      await this.assertOrderAccess(orderId, req.user.userId, req.user.role);
-      const receipt = await orderService.getReceiptData(orderId);
+      try {
+        await this.assertOrderAccess(orderId, req.user.userId, req.user.role);
+        const receipt = await orderService.getReceiptData(orderId);
+        sendSuccess(res, 200, 'Receipt data generated', receipt);
+      } catch (error) {
+        if (!isDatabaseUnavailable(error)) {
+          throw error;
+        }
 
-      sendSuccess(res, 200, 'Receipt data generated', receipt);
+        const order = demoStore.getOrderById(orderId);
+        if (!order) {
+          throw new NotFoundError('Order not found');
+        }
+        sendSuccess(res, 200, 'Receipt data generated', {
+          orderId: order.id,
+          orderNumber: order.orderNumber,
+          status: order.status,
+          totalAmount: order.finalPrice,
+          createdAt: order.createdAt,
+        });
+      }
     } catch (error) {
       next(error);
     }

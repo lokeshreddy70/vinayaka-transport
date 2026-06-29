@@ -13,6 +13,8 @@ import { comparePassword, hashPassword } from '../utils/auth';
 import { otpChallengeStore } from './otpChallengeStore';
 import { smsService } from './smsService';
 import config from '../config';
+import { isDatabaseUnavailable } from '../utils/dbFallback';
+import { demoStore } from './demoStore';
 
 export class AuthService {
   private normalizePhone(value: string): string {
@@ -44,65 +46,92 @@ export class AuthService {
     role?: string
   ): Promise<{ user: any; accessToken: string; refreshToken: string }> {
     const normalizedPhoneNumber = this.normalizePhone(phoneNumber);
-    const user = await prisma.user.findUnique({ where: { phoneNumber: normalizedPhoneNumber } });
 
-    if (!user || user.isBlocked) {
-      throw new ValidationError('Invalid credentials');
-    }
+    try {
+      const user = await prisma.user.findUnique({ where: { phoneNumber: normalizedPhoneNumber } });
 
-    if (role && user.role !== role) {
-      throw new ValidationError('Invalid credentials');
-    }
+      if (!user || user.isBlocked) {
+        throw new ValidationError('Invalid credentials');
+      }
 
-    if (!user.passwordHash) {
-      throw new ValidationError('Password is not set for this account');
-    }
+      if (role && user.role !== role) {
+        throw new ValidationError('Invalid credentials');
+      }
 
-    const valid = await comparePassword(password, user.passwordHash);
-    if (!valid) {
-      throw new ValidationError('Invalid credentials');
-    }
+      if (!user.passwordHash) {
+        throw new ValidationError('Password is not set for this account');
+      }
 
-    await prisma.deviceSession.upsert({
-      where: { deviceId },
-      create: {
+      const valid = await comparePassword(password, user.passwordHash);
+      if (!valid) {
+        throw new ValidationError('Invalid credentials');
+      }
+
+      await prisma.deviceSession.upsert({
+        where: { deviceId },
+        create: {
+          userId: user.id,
+          deviceId,
+          deviceName: deviceInfo,
+          deviceOS: 'unknown',
+        },
+        update: {
+          userId: user.id,
+          deviceName: deviceInfo,
+          lastActivityAt: new Date(),
+          isActive: true,
+        },
+      });
+
+      const accessToken = generateAccessToken({
         userId: user.id,
+        phoneNumber: user.phoneNumber,
+        role: user.role,
         deviceId,
-        deviceName: deviceInfo,
-        deviceOS: 'unknown',
-      },
-      update: {
+      });
+
+      const refreshToken = generateRefreshToken({
         userId: user.id,
-        deviceName: deviceInfo,
-        lastActivityAt: new Date(),
-        isActive: true,
-      },
-    });
+        phoneNumber: user.phoneNumber,
+        role: user.role,
+        deviceId,
+      });
 
-    const accessToken = generateAccessToken({
-      userId: user.id,
-      phoneNumber: user.phoneNumber,
-      role: user.role,
-      deviceId,
-    });
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          jwtToken: accessToken,
+          refreshToken,
+          lastLogin: new Date(),
+        },
+      });
 
-    const refreshToken = generateRefreshToken({
-      userId: user.id,
-      phoneNumber: user.phoneNumber,
-      role: user.role,
-      deviceId,
-    });
+      return { user, accessToken, refreshToken };
+    } catch (error) {
+      if (!isDatabaseUnavailable(error)) {
+        throw error;
+      }
 
-    await prisma.user.update({
-      where: { id: user.id },
-      data: {
-        jwtToken: accessToken,
-        refreshToken,
-        lastLogin: new Date(),
-      },
-    });
+      const user = await demoStore.loginWithPassword(normalizedPhoneNumber, password);
+      if (role && user.role !== role) {
+        throw new ValidationError('Invalid credentials');
+      }
 
-    return { user, accessToken, refreshToken };
+      const accessToken = generateAccessToken({
+        userId: user.id,
+        phoneNumber: user.phoneNumber,
+        role: user.role,
+        deviceId,
+      });
+      const refreshToken = generateRefreshToken({
+        userId: user.id,
+        phoneNumber: user.phoneNumber,
+        role: user.role,
+        deviceId,
+      });
+      demoStore.setUserRefreshToken(user.id, refreshToken);
+      return { user, accessToken, refreshToken };
+    }
   }
 
   async registerCustomerWithPassword(
@@ -117,111 +146,146 @@ export class AuthService {
     }
 
     const normalizedPhoneNumber = this.normalizePhone(phoneNumber);
-    const existing = await prisma.user.findUnique({ where: { phoneNumber: normalizedPhoneNumber } });
 
-    if (existing) {
-      throw new ValidationError('Account already exists. Please login.');
+    try {
+      const existing = await prisma.user.findUnique({ where: { phoneNumber: normalizedPhoneNumber } });
+
+      if (existing) {
+        throw new ValidationError('Account already exists. Please login.');
+      }
+
+      const passwordHash = await hashPassword(password);
+
+      const user = await prisma.user.create({
+        data: {
+          phoneNumber: normalizedPhoneNumber,
+          fullName,
+          role: 'CUSTOMER',
+          isVerified: true,
+          passwordHash,
+          jwtToken: '',
+          refreshToken: '',
+          deviceId,
+          deviceInfo,
+        },
+      });
+
+      await prisma.customer.create({ data: { userId: user.id } });
+      await prisma.wallet.create({ data: { customerId: user.id } });
+
+      await prisma.deviceSession.upsert({
+        where: { deviceId },
+        create: {
+          userId: user.id,
+          deviceId,
+          deviceName: deviceInfo,
+          deviceOS: 'unknown',
+        },
+        update: {
+          userId: user.id,
+          deviceName: deviceInfo,
+          lastActivityAt: new Date(),
+          isActive: true,
+        },
+      });
+
+      const accessToken = generateAccessToken({
+        userId: user.id,
+        phoneNumber: user.phoneNumber,
+        role: user.role,
+        deviceId,
+      });
+
+      const refreshToken = generateRefreshToken({
+        userId: user.id,
+        phoneNumber: user.phoneNumber,
+        role: user.role,
+        deviceId,
+      });
+
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          jwtToken: accessToken,
+          refreshToken,
+          lastLogin: new Date(),
+        },
+      });
+
+      return { user, accessToken, refreshToken };
+    } catch (error) {
+      if (!isDatabaseUnavailable(error)) {
+        throw error;
+      }
+
+      const { user } = await demoStore.registerCustomer(fullName, normalizedPhoneNumber, password);
+      const accessToken = generateAccessToken({
+        userId: user.id,
+        phoneNumber: user.phoneNumber,
+        role: user.role,
+        deviceId,
+      });
+      const refreshToken = generateRefreshToken({
+        userId: user.id,
+        phoneNumber: user.phoneNumber,
+        role: user.role,
+        deviceId,
+      });
+      demoStore.setUserRefreshToken(user.id, refreshToken);
+      return { user, accessToken, refreshToken };
     }
-
-    const passwordHash = await hashPassword(password);
-
-    const user = await prisma.user.create({
-      data: {
-        phoneNumber: normalizedPhoneNumber,
-        fullName,
-        role: 'CUSTOMER',
-        isVerified: true,
-        passwordHash,
-        jwtToken: '',
-        refreshToken: '',
-        deviceId,
-        deviceInfo,
-      },
-    });
-
-    await prisma.customer.create({
-      data: {
-        userId: user.id,
-      },
-    });
-
-    await prisma.wallet.create({
-      data: {
-        customerId: user.id,
-      },
-    });
-
-    await prisma.deviceSession.upsert({
-      where: { deviceId },
-      create: {
-        userId: user.id,
-        deviceId,
-        deviceName: deviceInfo,
-        deviceOS: 'unknown',
-      },
-      update: {
-        userId: user.id,
-        deviceName: deviceInfo,
-        lastActivityAt: new Date(),
-        isActive: true,
-      },
-    });
-
-    const accessToken = generateAccessToken({
-      userId: user.id,
-      phoneNumber: user.phoneNumber,
-      role: user.role,
-      deviceId,
-    });
-
-    const refreshToken = generateRefreshToken({
-      userId: user.id,
-      phoneNumber: user.phoneNumber,
-      role: user.role,
-      deviceId,
-    });
-
-    await prisma.user.update({
-      where: { id: user.id },
-      data: {
-        jwtToken: accessToken,
-        refreshToken,
-        lastLogin: new Date(),
-      },
-    });
-
-    return { user, accessToken, refreshToken };
   }
 
   async getCurrentUser(userId: string): Promise<any> {
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      include: {
-        customer: true,
-        rider: true,
-        admin: true,
-        franchiseManager: true,
-      },
-    });
+    try {
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        include: {
+          customer: true,
+          rider: true,
+          admin: true,
+          franchiseManager: true,
+        },
+      });
 
-    if (!user) {
-      throw new NotFoundError('User not found');
+      if (!user) {
+        throw new NotFoundError('User not found');
+      }
+
+      return {
+        id: user.id,
+        phoneNumber: user.phoneNumber,
+        fullName: user.fullName,
+        email: user.email,
+        role: user.role,
+        isVerified: user.isVerified,
+        isBlocked: user.isBlocked,
+        lastLogin: user.lastLogin,
+        admin: user.admin,
+        customer: user.customer,
+        rider: user.rider,
+        franchiseManager: user.franchiseManager,
+      };
+    } catch (error) {
+      if (!isDatabaseUnavailable(error)) {
+        throw error;
+      }
+
+      const user = demoStore.getUserById(userId);
+      if (!user) {
+        throw new NotFoundError('User not found');
+      }
+
+      return {
+        id: user.id,
+        phoneNumber: user.phoneNumber,
+        fullName: user.fullName,
+        role: user.role,
+        isVerified: true,
+        isBlocked: false,
+        lastLogin: new Date().toISOString(),
+      };
     }
-
-    return {
-      id: user.id,
-      phoneNumber: user.phoneNumber,
-      fullName: user.fullName,
-      email: user.email,
-      role: user.role,
-      isVerified: user.isVerified,
-      isBlocked: user.isBlocked,
-      lastLogin: user.lastLogin,
-      admin: user.admin,
-      customer: user.customer,
-      rider: user.rider,
-      franchiseManager: user.franchiseManager,
-    };
   }
 
   async sendOTP(phoneNumber: string): Promise<{ otp: string; expiresAt: Date; challengeToken: string }> {

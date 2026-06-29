@@ -3,6 +3,8 @@ import { verifyAccessToken } from '../config/jwt';
 import { AuthenticationError, AuthorizationError } from '../utils/errors';
 import prisma from '../config/database';
 import logger from '../config/logger';
+import { isDatabaseUnavailable } from '../utils/dbFallback';
+import { demoStore } from '../services/demoStore';
 
 export interface AuthRequest extends Request {
   user?: {
@@ -27,13 +29,23 @@ export const authenticate = async (
 
     const decoded = verifyAccessToken(token);
     
-    // Verify user exists
-    const user = await prisma.user.findUnique({
-      where: { id: decoded.userId },
-    });
+    try {
+      const user = await prisma.user.findUnique({
+        where: { id: decoded.userId },
+      });
 
-    if (!user || user.isBlocked) {
-      throw new AuthenticationError('User not found or blocked');
+      if (!user || user.isBlocked) {
+        throw new AuthenticationError('User not found or blocked');
+      }
+    } catch (error) {
+      if (!isDatabaseUnavailable(error)) {
+        throw error;
+      }
+
+      const demoUser = demoStore.getUserById(decoded.userId);
+      if (!demoUser) {
+        throw new AuthenticationError('User not found or blocked');
+      }
     }
 
     req.user = {
